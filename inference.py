@@ -19,7 +19,8 @@ import time
 from typing import Dict, List, Tuple, Union
 
 import httpx
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from hotelguard_env import HotelGuardEnv
 
 # ------------------------------------------------------------------ #
@@ -27,8 +28,7 @@ from hotelguard_env import HotelGuardEnv
 # ------------------------------------------------------------------ #
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.0-flash")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Always attempt LLM if any key is present.
 HAS_API_KEY = bool(GEMINI_API_KEY)
@@ -174,9 +174,10 @@ def llm_agent(obs: Dict, task: str, conversation_history: list,
         full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
         full_prompt += f"\nYour response: {entry['response']}"
 
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.types.GenerationConfig(
+    response = client.models.generate_content(
+        model=model_name,
+        contents=full_prompt,
+        config=types.GenerateContentConfig(
             temperature=0.0,
             max_output_tokens=120,
         ),
@@ -209,9 +210,10 @@ def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
         full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
         full_prompt += f"\nYour response: {entry['response']}"
 
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.types.GenerationConfig(
+    response = client.models.generate_content(
+        model=model_name,
+        contents=full_prompt,
+        config=types.GenerateContentConfig(
             temperature=0.0,
             max_output_tokens=120,
         ),

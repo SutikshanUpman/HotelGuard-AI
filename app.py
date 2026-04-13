@@ -1,6 +1,6 @@
 """
-HotelGuard-AI — Gradio + FastAPI App
-FastAPI (REST endpoints) + Gradio (interactive UI) for hospitality crisis detection.
+HotelGuard-AI — Gradio App
+Interactive UI for hospitality crisis detection.
 """
 
 import json
