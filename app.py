@@ -990,12 +990,10 @@ System Prompt  (task rules + thresholds)
 # ══════════════════════════════════════════════════════════════════
 
 def main():
-    port  = int(os.getenv("PORT", 7860))
-    is_hf = bool(os.getenv("SPACE_ID") or os.getenv("HF_SPACE_ID") or os.getenv("SYSTEM_SPACES"))
-    host  = "0.0.0.0" if is_hf else "127.0.0.1"
-    print(f"[STARTUP] HotelGuard-AI starting on {host}:{port}", flush=True)
+    port = int(os.getenv("PORT", 7860))
+    print(f"[STARTUP] HotelGuard-AI starting on 0.0.0.0:{port}", flush=True)
     gradio_app.launch(
-        server_name=host,
+        server_name="0.0.0.0",
         server_port=port,
         show_error=True,
         share=False,
