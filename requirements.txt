@@ -6,3 +6,4 @@ fastapi
 uvicorn[standard]
 httpx
 firebase-admin
+audioop-lts; python_version>="3.13"
