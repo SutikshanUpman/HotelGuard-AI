@@ -1,27 +1,27 @@
 """
 Task 3: Triage Grader (Hard)
 =============================
-Grades multi-patient triage using NDCG@4 (Normalized Discounted Cumulative Gain)
+Grades multi-zone triage using NDCG@4 (Normalized Discounted Cumulative Gain)
 combined with F1 detection accuracy, a temporal responsiveness score, and a
 concentration penalty.
 
-Score = 0.50 × NDCG@4      (priority ordering across patients)
-      + 0.30 × F1           (ALERT-only detection on emergency patients)
+Score = 0.50 × NDCG@4      (priority ordering across zones)
+      + 0.30 × F1           (EMERGENCY-only detection on crisis zones)
       + 0.20 × Responsiveness (how quickly agent reacts after condition changes)
-      - concentration_penalty (spamming same action to all patients)
-      - hesitation_penalty    (VERIFYing when patient is in EMERGENCY is costly)
+      - concentration_penalty (spamming same action to all zones)
+      - hesitation_penalty    (DISPATCHing when zone is in EMERGENCY is costly)
 
 Calibration targets:
-  - Rule-based agent (uniform VERIFY/IGNORE, no urgency differentiation) → 0.18–0.28
-  - Mediocre LLM (mostly correct ordering but slow to ALERT)             → 0.40–0.55
-  - Strong LLM agent (correct ordering, fast ALERT, differentiates well) → 0.65–0.80
+  - Rule-based agent (uniform DISPATCH/MONITOR, no urgency differentiation) → 0.18–0.28
+  - Mediocre LLM (mostly correct ordering but slow to escalate)             → 0.40–0.55
+  - Strong LLM agent (correct ordering, fast EMERGENCY, differentiates well)→ 0.65–0.80
 
 Key design decisions vs prior version:
   - Responsiveness component added (20%): rule-based agents can't adapt to
     condition changes mid-episode; LLMs that read observations can.
-  - Hesitation penalty added: VERIFY on an EMERGENCY patient is partial
+  - Hesitation penalty added: DISPATCH on an EMERGENCY zone is partial
     credit in the old grader (reward +0.3) but is explicitly penalised here.
-    A good agent must *commit* to ALERT when the signs are unambiguous.
+    A good agent must *commit* to EMERGENCY when the signs are unambiguous.
   - BORDERLINE urgency weight: 0.05 (was 0.1) — makes urgency ordering even
     harder to approximate with a static rule.
   - Concentration threshold tightened: 50% uniformity now triggers penalty
@@ -32,22 +32,22 @@ Key design decisions vs prior version:
 """
 
 import math
-from reward_function import Action, PatientCondition
+from reward_function import Action, ZoneCondition
 
 
 # ── Urgency weights (lower = harder to accidentally match true ordering) ──
 URGENCY_WEIGHT = {
-    PatientCondition.EMERGENCY:   1.0,
-    PatientCondition.DRUG_MASKED: 1.0,
-    PatientCondition.BORDERLINE:  0.05,   # was 0.3 then 0.1, now even lower
-    PatientCondition.STABLE:      0.0,
+    ZoneCondition.EMERGENCY:  1.0,
+    ZoneCondition.ESCALATED:  1.0,
+    ZoneCondition.BORDERLINE: 0.05,   # was 0.3 then 0.1, now even lower
+    ZoneCondition.STABLE:     0.0,
 }
 
 # ── Action urgency mapping (for NDCG predicted-urgency) ──
 ACTION_VALUE = {
-    Action.ALERT:  2,
-    Action.VERIFY: 1,
-    Action.IGNORE: 0,
+    Action.EMERGENCY: 2,
+    Action.DISPATCH:  1,
+    Action.MONITOR:   0,
 }
 
 
@@ -58,9 +58,9 @@ def _compute_ndcg(true_relevance: list, predicted_relevance: list) -> float:
     Parameters
     ----------
     true_relevance : list[float]
-        True urgency scores per patient (higher = more urgent).
+        True urgency scores per zone (higher = more urgent).
     predicted_relevance : list[float]
-        Predicted urgency scores per patient (derived from action history).
+        Predicted urgency scores per zone (derived from action history).
 
     Returns
     -------
@@ -85,18 +85,18 @@ def _compute_ndcg(true_relevance: list, predicted_relevance: list) -> float:
     )
 
     if idcg == 0.0:
-        return 1.0  # all patients equally urgent → any ordering is correct
+        return 1.0  # all zones equally urgent → any ordering is correct
 
     return dcg / idcg
 
 
 def _compute_responsiveness(stats_list: list) -> float:
     """
-    Score how quickly the agent reacts after a patient's condition worsens.
+    Score how quickly the agent reacts after a zone's condition worsens.
 
-    For every step where a patient transitions from STABLE/BORDERLINE into
-    EMERGENCY or DRUG_MASKED, we measure how many subsequent steps until the
-    agent first issues ALERT for that patient. Shorter lag = better score.
+    For every step where a zone transitions from STABLE/BORDERLINE into
+    EMERGENCY or ESCALATED, we measure how many subsequent steps until the
+    agent first issues EMERGENCY action for that zone. Shorter lag = better score.
 
     A rule-based agent with a fixed policy has infinite lag (it never adapts),
     so it scores 0.0 here. An LLM reading the observation can react within
@@ -105,7 +105,7 @@ def _compute_responsiveness(stats_list: list) -> float:
     Parameters
     ----------
     stats_list : list[dict]
-        Per-patient episode stats from RewardFunction.get_stats().
+        Per-zone episode stats from RewardFunction.get_stats().
 
     Returns
     -------
@@ -125,28 +125,28 @@ def _compute_responsiveness(stats_list: list) -> float:
             curr = conditions[t]
 
             # Detect a worsening transition
-            prev_ok = prev in (PatientCondition.STABLE, PatientCondition.BORDERLINE)
-            curr_bad = curr in (PatientCondition.EMERGENCY, PatientCondition.DRUG_MASKED)
+            prev_ok = prev in (ZoneCondition.STABLE, ZoneCondition.BORDERLINE)
+            curr_bad = curr in (ZoneCondition.EMERGENCY, ZoneCondition.ESCALATED)
 
             if not (prev_ok and curr_bad):
                 continue
 
-            # Find first ALERT after this transition
-            first_alert_lag = None
+            # Find first EMERGENCY action after this transition
+            first_emergency_lag = None
             for lag in range(0, min(max_lag, n - t)):
-                if actions[t + lag] == Action.ALERT:
-                    first_alert_lag = lag
+                if actions[t + lag] == Action.EMERGENCY:
+                    first_emergency_lag = lag
                     break
 
-            if first_alert_lag is None:
-                lag_scores.append(0.0)  # never alerted → zero credit
+            if first_emergency_lag is None:
+                lag_scores.append(0.0)  # never escalated → zero credit
             else:
                 # lag=0 → 1.0, lag=1 → 0.85, lag=5 → 0.30, lag=9 → ~0.05
-                lag_scores.append(math.exp(-0.35 * first_alert_lag))
+                lag_scores.append(math.exp(-0.35 * first_emergency_lag))
 
     if not lag_scores:
         # No condition transitions in this episode → score based on
-        # whether ALERTs correctly targeted persistent emergencies
+        # whether EMERGENCY actions correctly targeted persistent crises
         # (flat 0.5 — neither rewards nor heavily penalises)
         return 0.5
 
@@ -160,8 +160,8 @@ def grade_triage(stats_list: list) -> float:
     Parameters
     ----------
     stats_list : list[dict]
-        List of per-patient episode stats from RewardFunction.get_stats().
-        Expects at least 2 patients (meaningful triage requires comparison).
+        List of per-zone episode stats from RewardFunction.get_stats().
+        Expects at least 2 zones (meaningful triage requires comparison).
 
     Returns
     -------
@@ -174,7 +174,7 @@ def grade_triage(stats_list: list) -> float:
     total_steps = stats_list[0]["total_steps"] if stats_list[0]["total_steps"] > 0 else 1
 
     # ── Component 1: NDCG@N — priority ordering (50%) ────────────────────────
-    # True urgency: weighted fraction of steps each patient was in bad condition
+    # True urgency: weighted fraction of steps each zone was in bad condition
     true_urgency = []
     for stats in stats_list:
         weighted = sum(
@@ -183,7 +183,7 @@ def grade_triage(stats_list: list) -> float:
         )
         true_urgency.append(weighted / total_steps)
 
-    # Predicted urgency: mean action value (ALERT=2, VERIFY=1, IGNORE=0)
+    # Predicted urgency: mean action value (EMERGENCY=2, DISPATCH=1, MONITOR=0)
     predicted_urgency = []
     for stats in stats_list:
         vals = [ACTION_VALUE[a] for a in stats["action_history"]]
@@ -193,22 +193,22 @@ def grade_triage(stats_list: list) -> float:
     ndcg = _compute_ndcg(true_urgency, predicted_urgency)
 
     # ── Component 2: F1 Detection Accuracy (30%) ──────────────────────────────
-    # Only ALERT counts as a positive detection.
-    # VERIFY is explicitly neutral-to-bad (see hesitation_penalty below).
+    # Only EMERGENCY action counts as a positive detection.
+    # DISPATCH is explicitly neutral-to-bad (see hesitation_penalty below).
     tp, tn, fp, fn = 0, 0, 0, 0
 
     for stats in stats_list:
         for action, condition in zip(stats["action_history"], stats["condition_history"]):
-            is_emergency = condition in (PatientCondition.EMERGENCY, PatientCondition.DRUG_MASKED)
-            is_alert = (action == Action.ALERT)
+            is_crisis = condition in (ZoneCondition.EMERGENCY, ZoneCondition.ESCALATED)
+            is_emergency_action = (action == Action.EMERGENCY)
 
-            if is_emergency and is_alert:
+            if is_crisis and is_emergency_action:
                 tp += 1
-            elif not is_emergency and not is_alert:
+            elif not is_crisis and not is_emergency_action:
                 tn += 1
-            elif not is_emergency and is_alert:
+            elif not is_crisis and is_emergency_action:
                 fp += 1
-            elif is_emergency and not is_alert:
+            elif is_crisis and not is_emergency_action:
                 fn += 1
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
@@ -216,11 +216,11 @@ def grade_triage(stats_list: list) -> float:
     f1 = (2 * precision * recall / (precision + recall)
           if (precision + recall) > 0 else 0.0)
 
-    # ── Component 3: Responsiveness — lag to ALERT after worsening (20%) ─────
+    # ── Component 3: Responsiveness — lag to EMERGENCY after worsening (20%) ─
     responsiveness = _compute_responsiveness(stats_list)
 
     # ── Penalty A: Concentration ───────────────────────────────────────────────
-    # Agents that apply the same action to every patient every step are doing
+    # Agents that apply the same action to every zone every step are doing
     # zero triage (triage = differentiation). Threshold tightened to 50%.
     concentration_penalty = 0.0
     if total_steps > 0 and len(stats_list) >= 2:
@@ -240,23 +240,23 @@ def grade_triage(stats_list: list) -> float:
             concentration_penalty = min(0.20, (uniformity_rate - 0.50) * 0.50)
 
     # ── Penalty B: Hesitation ─────────────────────────────────────────────────
-    # VERIFY on an EMERGENCY patient wastes critical time.
-    # Each VERIFY-on-emergency step contributes a fractional penalty.
-    # A rule-based VERIFY-everything agent typically runs VERIFY on emergencies
+    # DISPATCH on an EMERGENCY zone wastes critical time.
+    # Each DISPATCH-on-emergency step contributes a fractional penalty.
+    # A rule-based DISPATCH-everything agent typically runs DISPATCH on emergencies
     # for the entire episode → maximum hesitation penalty.
     total_emergency_steps = 0
-    verify_on_emergency = 0
+    dispatch_on_emergency = 0
 
     for stats in stats_list:
         for action, condition in zip(stats["action_history"], stats["condition_history"]):
-            if condition in (PatientCondition.EMERGENCY, PatientCondition.DRUG_MASKED):
+            if condition in (ZoneCondition.EMERGENCY, ZoneCondition.ESCALATED):
                 total_emergency_steps += 1
-                if action == Action.VERIFY:
-                    verify_on_emergency += 1
+                if action == Action.DISPATCH:
+                    dispatch_on_emergency += 1
 
     hesitation_penalty = 0.0
     if total_emergency_steps > 0:
-        hesitation_rate = verify_on_emergency / total_emergency_steps
+        hesitation_rate = dispatch_on_emergency / total_emergency_steps
         # Only penalise beyond 20% hesitation (allow for early-episode uncertainty)
         if hesitation_rate > 0.20:
             hesitation_penalty = min(0.12, (hesitation_rate - 0.20) * 0.15)

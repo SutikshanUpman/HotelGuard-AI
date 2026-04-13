@@ -1,16 +1,14 @@
 """
-MediGuard-AI — LLM-Based Inference Script
+HotelGuard-AI — LLM-Based Inference Script
 
-Runs an LLM agent (via OpenAI client) against all 3 hackathon tasks.
+Runs an LLM agent (via Google Gemini) against all 3 tasks.
 Falls back to a rule-based baseline agent on API errors or missing key.
 
 Runtime guarantee: 60 steps × 3 tasks × 4s timeout = 720s = 12 min worst case.
 Well within the 30-minute eval time limit.
 
 Environment variables:
-  HF_TOKEN / API_KEY / OPENAI_API_KEY — authentication token
-  API_BASE_URL — LLM endpoint (default: HuggingFace router)
-  MODEL_NAME   — model identifier (default: Qwen/Qwen2.5-72B-Instruct)
+  GEMINI_API_KEY — Google Gemini authentication token
 """
 
 from __future__ import annotations
@@ -21,119 +19,67 @@ import time
 from typing import Dict, List, Tuple, Union
 
 import httpx
-from openai import OpenAI
-from mediguard_env import MediGuardEnv
+import google.generativeai as genai
+from hotelguard_env import HotelGuardEnv
 
 # ------------------------------------------------------------------ #
 #  Configuration                                                      #
 # ------------------------------------------------------------------ #
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.0-flash")
 
-# CRITICAL: Validator injects API_KEY (not HF_TOKEN). Read API_KEY first.
-API_KEY = (
-    os.getenv("API_KEY")           # validator injects this
-    or os.getenv("HF_TOKEN")       # our own token
-    or os.getenv("OPENAI_API_KEY")
-    or "dummy"
-)
-
-# Always attempt LLM if any key is present — validator always injects one.
-HAS_API_KEY = bool(API_KEY) and API_KEY != "dummy"
+# Always attempt LLM if any key is present.
+HAS_API_KEY = bool(GEMINI_API_KEY)
 
 MODEL_BY_TASK = {
-    "suppression":   MODEL_NAME,
-    "deterioration": MODEL_NAME,
-    "triage":        MODEL_NAME,
+    "suppression":   "gemini-2.0-flash",
+    "deterioration": "gemini-2.0-flash",
+    "triage":        "gemini-2.0-flash",
 }
 
-# ── Timeout fix ─────────────────────────────────────────────────────
-# timeout= is NOT a valid kwarg in chat.completions.create().
-# Must be set at the httpx.Client level.
-# 4s hard cap: 60 steps × 3 tasks × 4s = 720s = 12 min worst case.
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=API_KEY,
-    http_client=httpx.Client(
-        timeout=httpx.Timeout(8.0, connect=8.0)
-    ),
-)
+MONITOR   = 0
+DISPATCH  = 1
+EMERGENCY = 2
 
-IGNORE = 0
-VERIFY = 1
-ALERT  = 2
-
-ACTIVITY_NAMES = {
-    0: "resting (lying in bed)",
-    1: "eating",
-    2: "walking/ambulating",
-    3: "in distress",
-    4: "falling",
-}
-
-BASELINE_SCORES = {
-    "suppression":   0.6500,   # updated: spike injection means grader now uses F1 branch
-    "deterioration": 0.3931,
-    "triage":        0.3073,
+CONTEXT_NAMES = {
+    0: "quiet hours",
+    1: "meal service",
+    2: "event in progress",
+    3: "guest distress signal",
+    4: "physical emergency",
 }
 
 # ------------------------------------------------------------------ #
 #  System Prompts                                                     #
 # ------------------------------------------------------------------ #
 
-SUPPRESSION_PROMPT = """You are an ICU monitoring AI. Your job: decide if a patient's vitals need attention.
+SUPPRESSION_PROMPT = """You are an AI safety agent monitoring a hotel ballroom during an event.
+Sensor signals: motion_level, sound_db, door_events, panic_score, occupancy_delta, smoke_co_level. All normalized 0–1 against this zone's rolling baseline. Context 2 = event in progress (noise/motion expected — suppress normal event activity). Context 0 = quiet hours (full weight on anomalies). A genuine emergency is a sudden panic_score spike combined with motion drop and sound drop (crowd reacting).
+Rules:
+- MONITOR (0): zone reads normal for its current context
+- DISPATCH (1): something is off — send staff to investigate
+- EMERGENCY (2): genuine crisis — call emergency services NOW
+Respond ONLY with valid JSON: {"action": <0|1|2>, "reason": "<brief>"}"""
 
-KEY INSIGHT: Vitals are normalized relative to THIS patient's personal baseline (0-1 scale).
-A baseline_delta of 0.3 while walking → normal (exertion raises HR).
-A baseline_delta of 0.3 while lying still → concerning.
+DETERIORATION_PROMPT = """You are an AI safety agent monitoring a hotel guest room.
+Watch for slow deterioration: motion dropping, door_events stopping, smoke_co_level climbing, panic_score rising. These signals together over multiple steps indicate a medical emergency or early fire buildup.
+Single readings within range are not alarming — you must detect the TREND using signal_history (last 10 timesteps provided).
+Rules:
+- MONITOR (0): readings stable, trend normal
+- DISPATCH (1): trend is concerning — send staff to check
+- EMERGENCY (2): trend indicates imminent crisis — escalate immediately
+Respond ONLY with valid JSON: {"action": <0|1|2>, "reason": "<brief>"}"""
 
-RULES FOR SUPPRESSION TASK:
-- This patient is CHRONICALLY HYPERTENSIVE. High BP is NORMAL for them.
-- Default to IGNORE unless evidence is compelling.
-- Activity context heavily discounts vitals spikes: walking/eating → IGNORE.
-- False alarms are MORE costly than missed mild events.
-- Only ALERT for baseline_delta > 0.5 WITH resting/distressed/falling context.
-- VERIFY is the safe middle ground — use it for uncertain cases.
-- After learning the baseline (hours > 1.0), trust that stable readings are fine.
-
-Respond with ONLY JSON: {"action": 0, "reasoning": "Explain using vitals/activity in <15 words"}
-action: 0=IGNORE, 1=VERIFY, 2=ALERT"""
-
-DETERIORATION_PROMPT = """You are an ICU monitoring AI detecting slow patient deterioration (sepsis).
-
-KEY INSIGHT: Vitals are normalized 0-1. Look for TRENDS, not just current values.
-A single reading of SpO2=0.80 might be noise. But SpO2 dropping 0.93→0.88→0.83→0.80 over 4 steps = real deterioration.
-
-RULES FOR DETERIORATION TASK:
-- Read the vitals history table carefully — it shows the last 8 readings.
-- Look for TRENDS: consistent directional changes across multiple steps.
-- SpO2 dropping is MORE urgent than HR rising — weight it higher.
-- Temperature rising steadily over multiple steps = infection sign → VERIFY/ALERT.
-- A single spike that returns to normal = noise → IGNORE.
-- Early detection scores HIGHER than late detection — act on trends, don't wait for crisis.
-- If SpO2 is below 0.50 or temp above 0.65, ALERT regardless of trend.
-
-Respond with ONLY JSON: {"action": 0, "reasoning": "Explain using vitals/activity in <15 words"}
-action: 0=IGNORE, 1=VERIFY, 2=ALERT"""
-
-TRIAGE_PROMPT = """You are an ICU monitoring AI triaging 4 patients simultaneously.
-
-KEY INSIGHT: You must RANK patients by urgency, not just evaluate each independently.
-The most critical patient gets ALERT, second-most gets VERIFY, stable ones get IGNORE.
-
-RULES FOR TRIAGE TASK:
-- Look at ALL 4 patients before deciding — this is a ranking problem.
-- ALERT the most critical patient (highest baseline_delta, worst vitals, dangerous activity).
-- VERIFY the second most concerning patient.
-- IGNORE patients who look stable.
-- If two patients are both critical, ALERT both.
-- Activity matters: falling/distressed beats resting which beats walking/eating.
-- High baseline_delta + resting = more concerning than high delta + walking.
-- Don't ALERT more than 2 patients unless multiple are genuinely critical.
-
-Respond with ONLY JSON: {"actions": [a0,a1,a2,a3], "reasoning": "Explain ranking using vitals/activity in <20 words"}
-Each action: 0=IGNORE, 1=VERIFY, 2=ALERT. Array position = patient index."""
+TRIAGE_PROMPT = """You are an AI safety agent managing 4 hotel zones simultaneously.
+You receive observations for all 4 zones and must rank them by urgency and allocate responses. This is a RANKING problem — do not apply the same action to every zone. Compare zones against each other.
+Urgency signals: high panic_score, rising smoke_co_level, motion near zero.
+Rules:
+- MONITOR (0): zone is stable — no action needed
+- DISPATCH (1): zone is borderline — send staff
+- EMERGENCY (2): zone is in crisis — call emergency services
+Respond ONLY with valid JSON: {"actions": [<0|1|2>, <0|1|2>, <0|1|2>, <0|1|2>], "reason": "<brief>"}"""
 
 SYSTEM_PROMPTS = {
     "suppression":   SUPPRESSION_PROMPT,
@@ -145,37 +91,37 @@ SYSTEM_PROMPTS = {
 #  Observation formatting                                             #
 # ------------------------------------------------------------------ #
 
-def obs_to_user_message(obs: Dict, task: str, vitals_history: list,
+def obs_to_user_message(obs: Dict, task: str, signal_history: list,
                         conversation_history: list) -> str:
-    activity_name = ACTIVITY_NAMES.get(obs.get("activity", 0), "unknown")
+    context_name = CONTEXT_NAMES.get(obs.get("activity", 0), "unknown")
     hours = obs.get("hours_observed", 0.0)
 
     lines = [
         f"Step: {int(hours * 60)}/{60}  |  Hours observed: {hours:.1f}h",
         "",
-        "CURRENT VITALS (normalized 0-1):",
-        f"  Heart Rate:    {obs.get('heart_rate', 0):.3f}",
-        f"  SpO2:          {obs.get('spo2', 0):.3f}",
-        f"  Systolic BP:   {obs.get('systolic_bp', 0):.3f}",
-        f"  Diastolic BP:  {obs.get('diastolic_bp', 0):.3f}",
-        f"  Resp Rate:     {obs.get('respiratory_rate', 0):.3f}",
-        f"  Temperature:   {obs.get('temperature', 0):.3f}",
+        "CURRENT SIGNALS (normalized 0-1):",
+        f"  Motion Level:    {obs.get('motion_level', 0):.3f}",
+        f"  Sound dB:        {obs.get('sound_db', 0):.3f}",
+        f"  Door Events:     {obs.get('door_events', 0):.3f}",
+        f"  Panic Score:     {obs.get('panic_score', 0):.3f}",
+        f"  Occupancy Δ:     {obs.get('occupancy_delta', 0):.3f}",
+        f"  Smoke/CO:        {obs.get('smoke_co_level', 0):.3f}",
         "",
-        f"Baseline Delta:  {obs.get('baseline_delta', 0):.3f} (deviation from personal norm)",
-        f"Activity:        {activity_name}",
+        f"Baseline Delta:  {obs.get('baseline_delta', 0):.3f} (deviation from zone norm)",
+        f"Context:         {context_name}",
     ]
 
-    if task == "deterioration" and len(vitals_history) >= 3:
+    if task == "deterioration" and len(signal_history) >= 3:
         lines.append("")
-        lines.append("VITALS TREND (last readings, oldest→newest):")
-        lines.append("  Step   HR     SpO2   SysBP  Temp")
-        n = len(vitals_history)
-        for i, reading in enumerate(vitals_history):
+        lines.append("SIGNAL TREND (last readings, oldest→newest):")
+        lines.append("  Step   Motion Sound  Panic  Smoke")
+        n = len(signal_history)
+        for i, reading in enumerate(signal_history):
             offset = -(n - i)
             if len(reading) >= 6:
                 lines.append(
-                    f"  {offset:+4d}   {reading[0]:.3f}  {reading[3]:.3f}  "
-                    f"{reading[1]:.3f}  {reading[5]:.3f}"
+                    f"  {offset:+4d}   {reading[0]:.3f}  {reading[1]:.3f}  "
+                    f"{reading[3]:.3f}  {reading[5]:.3f}"
                 )
 
     if conversation_history:
@@ -190,22 +136,22 @@ def obs_to_user_message(obs: Dict, task: str, vitals_history: list,
 def triage_obs_to_message(obs_list: List[Dict], conversation_history: list) -> str:
     lines = []
     for i, obs in enumerate(obs_list):
-        activity_name = ACTIVITY_NAMES.get(obs.get("activity", 0), "unknown")
-        lines.append(f"PATIENT {i} :")
+        context_name = CONTEXT_NAMES.get(obs.get("activity", 0), "unknown")
+        lines.append(f"ZONE {i} :")
         lines.append(
-            f"  Vitals:  HR={obs.get('heart_rate', 0):.3f}  "
-            f"SpO2={obs.get('spo2', 0):.3f}  "
-            f"SysBP={obs.get('systolic_bp', 0):.3f}  "
-            f"Temp={obs.get('temperature', 0):.3f}"
+            f"  Signals:  Motion={obs.get('motion_level', 0):.3f}  "
+            f"Panic={obs.get('panic_score', 0):.3f}  "
+            f"Sound={obs.get('sound_db', 0):.3f}  "
+            f"Smoke={obs.get('smoke_co_level', 0):.3f}"
         )
         lines.append(
-            f"  Activity: {activity_name}  |  "
+            f"  Context: {context_name}  |  "
             f"Baseline Delta: {obs.get('baseline_delta', 0):.3f}  |  "
             f"Hours: {obs.get('hours_observed', 0):.1f}h"
         )
         lines.append("")
-    lines.append("Rank these patients by urgency. Assign actions:")
-    lines.append("  Most critical → ALERT(2). Second → VERIFY(1). Stable → IGNORE(0).")
+    lines.append("Rank these zones by urgency. Assign actions:")
+    lines.append("  Most critical → EMERGENCY(2). Second → DISPATCH(1). Stable → MONITOR(0).")
     if conversation_history:
         lines.append("")
         lines.append("YOUR RECENT DECISIONS:")
@@ -218,23 +164,24 @@ def triage_obs_to_message(obs_list: List[Dict], conversation_history: list) -> s
 # ------------------------------------------------------------------ #
 
 def llm_agent(obs: Dict, task: str, conversation_history: list,
-              vitals_history: list, model: str) -> Tuple[int, str]:
+              signal_history: list, model_name: str) -> Tuple[int, str]:
     system_prompt = SYSTEM_PROMPTS[task]
-    user_message = obs_to_user_message(obs, task, vitals_history, conversation_history)
+    user_message = obs_to_user_message(obs, task, signal_history, conversation_history)
 
-    messages = [{"role": "system", "content": system_prompt}]
+    # Build conversation for Gemini
+    full_prompt = system_prompt + "\n\n" + user_message
     for entry in conversation_history[-2:]:
-        messages.append({"role": "user", "content": entry["obs_text"][:500]})
-        messages.append({"role": "assistant", "content": entry["response"]})
-    messages.append({"role": "user", "content": user_message})
+        full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
+        full_prompt += f"\nYour response: {entry['response']}"
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.0,
-        max_tokens=120,
+    response = model.generate_content(
+        full_prompt,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.0,
+            max_output_tokens=120,
+        ),
     )
-    raw_response = response.choices[0].message.content.strip()
+    raw_response = response.text.strip()
     return _parse_single_response(raw_response)
 
 
@@ -246,30 +193,30 @@ def _parse_single_response(raw: str) -> Tuple[int, str]:
         text = inner.strip()
     data = json.loads(text)
     action = int(data.get("action", 1))
-    reasoning = str(data.get("reasoning", ""))[:80]
+    reasoning = str(data.get("reason", data.get("reasoning", "")))[:80]
     if action not in (0, 1, 2):
         action = max(0, min(2, action))
     return action, reasoning
 
 
 def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
-                     model: str) -> Tuple[List[int], str]:
+                     model_name: str) -> Tuple[List[int], str]:
     system_prompt = SYSTEM_PROMPTS["triage"]
     user_message = triage_obs_to_message(obs_list, conversation_history)
 
-    messages = [{"role": "system", "content": system_prompt}]
+    full_prompt = system_prompt + "\n\n" + user_message
     for entry in conversation_history[-2:]:
-        messages.append({"role": "user", "content": entry["obs_text"][:500]})
-        messages.append({"role": "assistant", "content": entry["response"]})
-    messages.append({"role": "user", "content": user_message})
+        full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
+        full_prompt += f"\nYour response: {entry['response']}"
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.0,
-        max_tokens=120,
+    response = model.generate_content(
+        full_prompt,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.0,
+            max_output_tokens=120,
+        ),
     )
-    raw_response = response.choices[0].message.content.strip()
+    raw_response = response.text.strip()
     return _parse_triage_response(raw_response)
 
 
@@ -281,7 +228,7 @@ def _parse_triage_response(raw: str) -> Tuple[List[int], str]:
         text = inner.strip()
     data = json.loads(text)
     actions = list(data.get("actions", [0, 0, 0, 0]))
-    reasoning = str(data.get("reasoning", ""))[:100]
+    reasoning = str(data.get("reason", data.get("reasoning", "")))[:100]
     while len(actions) < 4:
         actions.append(0)
     actions = actions[:4]
@@ -296,111 +243,69 @@ def baseline_agent(obs: Dict) -> int:
     activity = obs["activity"]
     delta    = obs["baseline_delta"]
     hours    = obs["hours_observed"]
-    spo2     = obs["spo2"]
-    hr       = obs["heart_rate"]
-    temp     = obs.get("temperature", 0.4)
-    history  = obs.get("vitals_history", [])
+    panic    = obs["panic_score"]
+    motion   = obs["motion_level"]
+    smoke    = obs.get("smoke_co_level", 0.0)
+    history  = obs.get("signal_history", [])
 
     if hours < 1.0:
-        return VERIFY
+        return DISPATCH
     if activity == 2:
-        return ALERT if spo2 < 0.25 else IGNORE
+        return EMERGENCY if panic > 0.75 else MONITOR
     if delta > 0.6 and activity == 0:
-        return ALERT
+        return EMERGENCY
     if delta > 0.35 and activity == 0:
-        return VERIFY
-    if spo2 < 0.35:
-        return ALERT
-    if spo2 < 0.50:
-        return VERIFY
-    if temp > 0.80:
-        return ALERT
-    if temp > 0.65:
-        return VERIFY
-    if hr > 0.75:
-        return ALERT
-    if hr > 0.60:
-        return VERIFY
+        return DISPATCH
+    if panic > 0.65:
+        return EMERGENCY
+    if panic > 0.50:
+        return DISPATCH
+    if smoke > 0.60:
+        return EMERGENCY
+    if smoke > 0.40:
+        return DISPATCH
+    if motion < 0.10:
+        return EMERGENCY
+    if motion < 0.20:
+        return DISPATCH
 
     if len(history) >= 6:
         try:
             recent = history[-3:]
             oldest = history[:3]
-            recent_spo2 = sum(r[3] for r in recent) / 3
-            oldest_spo2 = sum(r[3] for r in oldest) / 3
-            spo2_drop = oldest_spo2 - recent_spo2
-            recent_temp = sum(r[5] for r in recent) / 3
-            oldest_temp = sum(r[5] for r in oldest) / 3
-            temp_rise = recent_temp - oldest_temp
-            if spo2_drop > 0.08: return ALERT
-            if spo2_drop > 0.04: return VERIFY
-            if temp_rise > 0.08: return ALERT
-            if temp_rise > 0.04: return VERIFY
+            recent_panic = sum(r[3] for r in recent) / 3
+            oldest_panic = sum(r[3] for r in oldest) / 3
+            panic_rise = recent_panic - oldest_panic
+            recent_smoke = sum(r[5] for r in recent) / 3
+            oldest_smoke = sum(r[5] for r in oldest) / 3
+            smoke_rise = recent_smoke - oldest_smoke
+            if panic_rise > 0.08: return EMERGENCY
+            if panic_rise > 0.04: return DISPATCH
+            if smoke_rise > 0.08: return EMERGENCY
+            if smoke_rise > 0.04: return DISPATCH
         except (IndexError, TypeError):
             pass
 
     if hours > 4.0:
         if delta > 0.20 and activity == 0:
-            return VERIFY
-        if spo2 < 0.55:
-            return VERIFY
-    return IGNORE
+            return DISPATCH
+        if panic > 0.45:
+            return DISPATCH
+    return MONITOR
 
 
 def triage_baseline(obs_list: List[Dict]) -> List[int]:
     return [baseline_agent(obs) for obs in obs_list]
 
 # ------------------------------------------------------------------ #
-#  OpenEnv validation                                                 #
-# ------------------------------------------------------------------ #
-
-def openenv_validate() -> bool:
-    try:
-        import yaml
-    except ImportError:
-        if not os.path.exists("openenv.yaml"):
-            print("[VALIDATE] fail openenv.yaml not found", flush=True)
-            return False
-        print("[VALIDATE] pass (yaml module not available, file exists)", flush=True)
-        return True
-
-    if not os.path.exists("openenv.yaml"):
-        print("[VALIDATE] fail openenv.yaml not found", flush=True)
-        return False
-
-    with open("openenv.yaml", "r") as f:
-        spec = yaml.safe_load(f)
-
-    required = ["name", "spec_version", "tasks", "action_space", "observation_space"]
-    for field in required:
-        if field not in spec:
-            print(f"[VALIDATE] fail missing field: {field}", flush=True)
-            return False
-
-    action_space = spec.get("action_space", {})
-    if action_space.get("n") != 3:
-        print(f"[VALIDATE] fail action_space.n={action_space.get('n')}, expected 3", flush=True)
-        return False
-
-    tasks = spec.get("tasks", [])
-    task_names = {t.get("name") for t in tasks}
-    for required_task in ("suppression", "deterioration", "triage"):
-        if required_task not in task_names:
-            print(f"[VALIDATE] fail missing task: {required_task}", flush=True)
-            return False
-
-    print("[VALIDATE] pass", flush=True)
-    return True
-
-# ------------------------------------------------------------------ #
 #  Logging                                                            #
 # ------------------------------------------------------------------ #
 
-def log_start(task: str, model: str):
-    print(f"[START] task={task} env=mediguard model={model}", flush=True)
+def log_start(task: str, model_name: str):
+    print(f"[START] task={task} env=hotelguard model={model_name}", flush=True)
 
-def log_agent(model: str):
-    print(f"[AGENT] type=llm model={model} temperature=0.0", flush=True)
+def log_agent(model_name: str):
+    print(f"[AGENT] type=llm model={model_name} temperature=0.0", flush=True)
 
 def log_step(step: int, action, reward: float, done: bool, error=None):
     if isinstance(action, (list, tuple)):
@@ -430,9 +335,9 @@ def log_reasoning(action, reasoning: str):
 #  Episode runner                                                     #
 # ------------------------------------------------------------------ #
 def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
-    model = MODEL_BY_TASK.get(task, MODEL_NAME)
-    log_start(task, model)
-    log_agent(model)
+    model_name = MODEL_BY_TASK.get(task, "gemini-2.0-flash")
+    log_start(task, model_name)
+    log_agent(model_name)
 
     rewards: List[float] = []
     steps = 0
@@ -441,10 +346,10 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
     last_reasoning = ""
     fallback_count = 0
     conversation_history: List[Dict] = []
-    vitals_history: List[list] = []
+    signal_history: List[list] = []
 
     try:
-        env = MediGuardEnv(task=task, seed=seed)
+        env = HotelGuardEnv(task=task, seed=seed)
         obs = env.reset()
         done = False
 
@@ -459,9 +364,9 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
             else:
                 try:
                     if task == "triage":
-                        action, reasoning = triage_llm_agent(obs, conversation_history, model)
+                        action, reasoning = triage_llm_agent(obs, conversation_history, model_name)
                     else:
-                        action, reasoning = llm_agent(obs, task, conversation_history, vitals_history, model)
+                        action, reasoning = llm_agent(obs, task, conversation_history, signal_history, model_name)
                 except json.JSONDecodeError:
                     used_fallback = True
                     reasoning = "parse_error"
@@ -483,21 +388,21 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
             last_action = action
             last_reasoning = reasoning
 
-            # ── LOGGING FOR EVERY STEP (Added for Phase 3 visibility) ──
+            # ── LOGGING FOR EVERY STEP ──
             log_step(steps, action, reward, done, error=None)
             log_reasoning(action, reasoning)
 
             if task == "triage":
                 obs_text = triage_obs_to_message(obs, conversation_history)
             else:
-                obs_text = obs_to_user_message(obs, task, vitals_history, conversation_history)
-                history = obs.get("vitals_history", [])
+                obs_text = obs_to_user_message(obs, task, signal_history, conversation_history)
+                history = obs.get("signal_history", [])
                 if history:
                     for entry in reversed(history):
                         if any(v != 0.0 for v in entry):
-                            vitals_history.append(entry)
+                            signal_history.append(entry)
                             break
-                    vitals_history = vitals_history[-8:]
+                    signal_history = signal_history[-8:]
 
             response_text = json.dumps({"action": action, "reasoning": reasoning})
             conversation_history.append({
@@ -510,7 +415,7 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
                 conversation_history = conversation_history[-4:]
 
         grader_map = {
-            "suppression": env.false_alarm_rate_grader,
+            "suppression": env.suppression_grader,
             "deterioration": env.deterioration_grader,
             "triage": env.triage_grader,
         }
@@ -525,7 +430,6 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
 
     # ── FINAL SUMMARY ──
     log_end(success, steps, rewards, score)
-    # The final log_reasoning call is removed here as it is now logged at every step above.
 
     if fallback_count > 0:
         print(
@@ -541,22 +445,14 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
 # ------------------------------------------------------------------ #
 
 def main():
-    openenv_validate()
-
-    key_source = (
-        "API_KEY" if os.getenv("API_KEY")
-        else "HF_TOKEN" if os.getenv("HF_TOKEN")
-        else "OPENAI_API_KEY" if os.getenv("OPENAI_API_KEY")
-        else "none"
-    )
-    print(f"[CONFIG] api_key_source={key_source} base_url={API_BASE_URL} model={MODEL_NAME}", flush=True)
+    key_source = "GEMINI_API_KEY" if os.getenv("GEMINI_API_KEY") else "none"
+    print(f"[CONFIG] api_key_source={key_source} model=gemini-2.0-flash", flush=True)
     print(f"[LLM_CHECK] has_key={HAS_API_KEY} client_ready=true", flush=True)
 
     if not HAS_API_KEY:
         print("[INFO] No API key — running fully rule-based (fast mode)", flush=True)
     else:
-        print(f"[INFO] LLM mode: {MODEL_NAME} | 60 steps/task | 4s timeout", flush=True)
-        print(f"[INFO] API endpoint: {API_BASE_URL}", flush=True)
+        print(f"[INFO] LLM mode: gemini-2.0-flash | 60 steps/task | 4s timeout", flush=True)
         print(f"[INFO] Worst-case runtime: 60 x 3 x 4s = 720s = 12 min", flush=True)
 
     tasks = ["suppression", "deterioration", "triage"]
@@ -582,13 +478,6 @@ def main():
     t = all_results["triage"]["score"]
 
     print(f"\n[SUMMARY] suppression={s:.4f} deterioration={d:.4f} triage={t:.4f}", flush=True)
-    print(
-        f"[IMPROVEMENT] vs_baseline "
-        f"suppression={s - BASELINE_SCORES['suppression']:+.4f} "
-        f"deterioration={d - BASELINE_SCORES['deterioration']:+.4f} "
-        f"triage={t - BASELINE_SCORES['triage']:+.4f}",
-        flush=True,
-    )
 
 
 if __name__ == "__main__":

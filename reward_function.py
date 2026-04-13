@@ -1,7 +1,7 @@
 """
-Reward Function for MediGuard-AI
-================================
-Maps (action × patient_condition × activity) to a reward signal with:
+Reward Function for HotelGuard-AI
+==================================
+Maps (action × zone_condition × activity) to a reward signal with:
   - Base reward table
   - Activity context multipliers (the novel mechanic)
   - Alarm fatigue modifier
@@ -12,62 +12,62 @@ from enum import Enum
 
 
 class Action(Enum):
-    IGNORE = 0
-    VERIFY = 1
-    ALERT  = 2
+    MONITOR   = 0
+    DISPATCH  = 1
+    EMERGENCY = 2
 
 
-class PatientCondition(Enum):
-    STABLE      = "stable"
-    BORDERLINE  = "borderline"
-    EMERGENCY   = "emergency"
-    DRUG_MASKED = "drug_masked"
+class ZoneCondition(Enum):
+    STABLE    = "stable"
+    BORDERLINE = "borderline"
+    EMERGENCY  = "emergency"
+    ESCALATED  = "escalated"
 
 
 # Base reward table: REWARD_TABLE[action][condition]
 REWARD_TABLE = {
-    Action.ALERT: {
-        PatientCondition.EMERGENCY:   +1.0,
-        PatientCondition.BORDERLINE:  +0.2,
-        PatientCondition.STABLE:      -0.5,
-        PatientCondition.DRUG_MASKED: +1.0,
+    Action.EMERGENCY: {
+        ZoneCondition.EMERGENCY:  +1.0,
+        ZoneCondition.BORDERLINE: +0.2,
+        ZoneCondition.STABLE:     -0.5,
+        ZoneCondition.ESCALATED:  +1.0,
     },
-    Action.VERIFY: {
-        PatientCondition.EMERGENCY:   +0.3,
-        PatientCondition.BORDERLINE:  +0.7,
-        PatientCondition.STABLE:      -0.1,
-        PatientCondition.DRUG_MASKED: +0.3,
+    Action.DISPATCH: {
+        ZoneCondition.EMERGENCY:  +0.3,
+        ZoneCondition.BORDERLINE: +0.7,
+        ZoneCondition.STABLE:     -0.1,
+        ZoneCondition.ESCALATED:  +0.3,
     },
-    Action.IGNORE: {
-        PatientCondition.EMERGENCY:   -1.0,
-        PatientCondition.BORDERLINE:  -0.2,
-        PatientCondition.STABLE:      +0.2,
-        PatientCondition.DRUG_MASKED: -1.0,
+    Action.MONITOR: {
+        ZoneCondition.EMERGENCY:  -1.0,
+        ZoneCondition.BORDERLINE: -0.2,
+        ZoneCondition.STABLE:     +0.2,
+        ZoneCondition.ESCALATED:  -1.0,
     },
 }
 
 # Activity context multipliers — the key insight:
-# Same vital sign means different things depending on what the patient is doing.
-#   HR 130 while walking    → expected (low multiplier, discount the anomaly)
-#   HR 130 while lying still → emergency (high multiplier, amplify the anomaly)
+# Same sensor reading means different things depending on venue context.
+#   High sound_db during event     → expected (low multiplier, discount the anomaly)
+#   High sound_db during quiet hrs → emergency (high multiplier, amplify the anomaly)
 ACTIVITY_CONTEXT = {
-    0: 1.00,  # resting (lying in bed) — baseline, no discount
-    1: 0.40,  # eating — slight HR/BP increase expected
-    2: 0.50,  # walking/ambulating — elevated vitals expected
-    3: 1.25,  # distressed — amplify concern
-    4: 1.60,  # falling — immediate concern
+    0: 1.00,  # quiet hours (2am–6am) — baseline, no discount
+    1: 0.40,  # meal service — slight motion/sound increase expected
+    2: 0.50,  # event in progress — elevated signals expected
+    3: 1.25,  # guest distress signal — amplify concern
+    4: 1.60,  # physical emergency confirmed — immediate concern
 }
 
 # Alarm fatigue settings
 FATIGUE_WINDOW      = 30   # look at last 30 steps
-FATIGUE_THRESHOLD   = 5    # more than 5 alerts in the window
+FATIGUE_THRESHOLD   = 5    # more than 5 emergency calls in the window
 FATIGUE_MULTIPLIER  = 0.6  # reduce reward to 60%
 
 # Personalization settings
 # P0 fix: was 200, which is unreachable in a 60-step episode.
 # Now 20 so the bonus fires from step 21 onward — matching the README description.
 PERSONALIZATION_STEP  = 20   # kicks in after this many steps
-PERSONALIZATION_BONUS = 0.2  # bonus for correctly ignoring known-normal
+PERSONALIZATION_BONUS = 0.2  # bonus for correctly monitoring known-normal zone
 
 
 class RewardFunction:
@@ -89,7 +89,7 @@ class RewardFunction:
         self.activity_history  = []
         self.step_count        = 0
 
-    def compute(self, action: Action, condition: PatientCondition,
+    def compute(self, action: Action, condition: ZoneCondition,
                 activity: int = 0) -> float:
         """
         Compute the reward for a single (action, condition, activity) tuple.
@@ -97,11 +97,11 @@ class RewardFunction:
         Parameters
         ----------
         action : Action
-            The agent's action (IGNORE, VERIFY, ALERT).
-        condition : PatientCondition
-            The patient's current condition.
+            The agent's action (MONITOR, DISPATCH, EMERGENCY).
+        condition : ZoneCondition
+            The zone's current condition.
         activity : int
-            The patient's current activity code (0-4).
+            The zone's current activity/context code (0-4).
 
         Returns
         -------
@@ -120,28 +120,28 @@ class RewardFunction:
         #    Only apply to penalty situations — don't discount correct actions
         ctx = ACTIVITY_CONTEXT.get(activity, 1.0)
         if base_reward < 0:
-            # Penalties are reduced during expected-high-vitals activities
-            # e.g., alerting during walking gets less penalty (ctx=0.5)
+            # Penalties are reduced during expected-high-signal activities
+            # e.g., dispatching during an event gets less penalty (ctx=0.5)
             base_reward *= ctx
-        elif condition in (PatientCondition.EMERGENCY, PatientCondition.DRUG_MASKED):
-            # Correct emergency responses amplified during dangerous activities
+        elif condition in (ZoneCondition.EMERGENCY, ZoneCondition.ESCALATED):
+            # Correct emergency responses amplified during dangerous contexts
             base_reward *= ctx
 
         # 3. Alarm fatigue modifier
         fatigue_modifier = 1.0
         if len(self.action_history) >= FATIGUE_WINDOW:
-            recent_alerts = sum(
+            recent_emergencies = sum(
                 1 for a in self.action_history[-FATIGUE_WINDOW:]
-                if a == Action.ALERT
+                if a == Action.EMERGENCY
             )
-            if recent_alerts > FATIGUE_THRESHOLD:
+            if recent_emergencies > FATIGUE_THRESHOLD:
                 fatigue_modifier = FATIGUE_MULTIPLIER
 
         # 4. Personalization bonus
         personalization = 0.0
         if (self.step_count > PERSONALIZATION_STEP
-                and action == Action.IGNORE
-                and condition == PatientCondition.STABLE):
+                and action == Action.MONITOR
+                and condition == ZoneCondition.STABLE):
             personalization = PERSONALIZATION_BONUS
 
         # Final reward
@@ -150,14 +150,14 @@ class RewardFunction:
 
     def get_stats(self) -> dict:
         """Return episode statistics for graders."""
-        total_alerts  = sum(1 for a in self.action_history if a == Action.ALERT)
-        total_verifies = sum(1 for a in self.action_history if a == Action.VERIFY)
-        total_ignores  = sum(1 for a in self.action_history if a == Action.IGNORE)
+        total_emergencies = sum(1 for a in self.action_history if a == Action.EMERGENCY)
+        total_dispatches  = sum(1 for a in self.action_history if a == Action.DISPATCH)
+        total_monitors    = sum(1 for a in self.action_history if a == Action.MONITOR)
         return {
             "total_steps":     self.step_count,
-            "total_alerts":    total_alerts,
-            "total_verifies":  total_verifies,
-            "total_ignores":   total_ignores,
+            "total_alerts":    total_emergencies,
+            "total_verifies":  total_dispatches,
+            "total_ignores":   total_monitors,
             "action_history":    list(self.action_history),
             "condition_history": list(self.condition_history),
             "activity_history":  list(self.activity_history),

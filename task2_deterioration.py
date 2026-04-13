@@ -1,29 +1,31 @@
 """
 Task 2: Deterioration Grader (Medium)
 =====================================
-Grades how well the agent detects slow patient deterioration (sepsis).
+Grades how well the agent detects slow zone deterioration (e.g. medical
+emergency or fire buildup in a guest room).
 
 Onset+delay scoring:
   1. Find deterioration episodes: runs of ≥5 steps where condition
      transitions from STABLE→BORDERLINE→EMERGENCY
   2. For each episode: score = 0.3 + 0.7 × max(0, 1 - delay/20)
-     where delay = steps between onset and first ALERT (VERIFY alone not enough)
+     where delay = steps between onset and first EMERGENCY action
+     (DISPATCH alone not enough)
   3. Missed episode = 0.0
   4. Final = mean across episodes, minus false alarm penalty
 
 Key changes vs original:
   - Base detection score lowered from 0.5 → 0.3 (late detection barely rewarded)
   - Delay window tightened from 40 → 20 steps (must detect faster)
-  - VERIFY alone does NOT count as detection — agent must escalate to ALERT
+  - DISPATCH alone does NOT count as detection — agent must escalate to EMERGENCY
   - False alarm penalty kicks in at 8% (was 15%), capped at 0.40 (was 0.25)
-  - ALERT bonus reduced: +0.08 (≤15 steps), +0.02 (≤30 steps)
+  - EMERGENCY bonus reduced: +0.08 (≤15 steps), +0.02 (≤30 steps)
 
 Calibrated so that:
-  - Rule-based agent (slow to escalate, relies on VERIFY) scores ~0.39
-  - A smart LLM/RL agent that detects trends early and ALERTs promptly → ~0.75+
+  - Rule-based agent (slow to escalate, relies on DISPATCH) scores ~0.39
+  - A smart LLM/RL agent that detects trends early and issues EMERGENCY promptly → ~0.75+
 """
 
-from reward_function import Action, PatientCondition
+from reward_function import Action, ZoneCondition
 
 
 def grade_deterioration(stats: dict) -> float:
@@ -55,9 +57,9 @@ def grade_deterioration(stats: dict) -> float:
 
     for i, condition in enumerate(condition_history):
         is_abnormal = condition in (
-            PatientCondition.BORDERLINE,
-            PatientCondition.EMERGENCY,
-            PatientCondition.DRUG_MASKED,
+            ZoneCondition.BORDERLINE,
+            ZoneCondition.EMERGENCY,
+            ZoneCondition.ESCALATED,
         )
 
         if is_abnormal:
@@ -78,17 +80,17 @@ def grade_deterioration(stats: dict) -> float:
     if not episodes:
         abnormal_steps = sum(
             1 for c in condition_history
-            if c != PatientCondition.STABLE
+            if c != ZoneCondition.STABLE
         )
         if abnormal_steps == 0:
             # Truly no deterioration — partial marks for not false-alarming
             # Lowered from 0.8 → 0.5 so agents can't score high on empty episodes
             return 0.5
         else:
-            # Scattered abnormality — only reward ALERT responses, not VERIFY
+            # Scattered abnormality — only reward EMERGENCY responses, not DISPATCH
             responded = 0
             for action, condition in zip(action_history, condition_history):
-                if condition != PatientCondition.STABLE and action == Action.ALERT:
+                if condition != ZoneCondition.STABLE and action == Action.EMERGENCY:
                     responded += 1
             response_rate = responded / abnormal_steps if abnormal_steps > 0 else 0
             return min(0.35, response_rate)
@@ -97,28 +99,28 @@ def grade_deterioration(stats: dict) -> float:
     episode_scores = []
 
     for onset, end in episodes:
-        # Find first ALERT within or shortly after onset
-        # VERIFY alone no longer counts — must escalate to ALERT
-        first_alert = None
+        # Find first EMERGENCY action within or shortly after onset
+        # DISPATCH alone no longer counts — must escalate to EMERGENCY
+        first_emergency = None
         search_end = min(end + 10, total_steps)   # tighter lag window (was +20)
 
         for i in range(onset, search_end):
             if i >= len(action_history):
                 break
-            if action_history[i] == Action.ALERT and first_alert is None:
-                first_alert = i
+            if action_history[i] == Action.EMERGENCY and first_emergency is None:
+                first_emergency = i
 
-        if first_alert is None:
-            # Missed entirely — no ALERT issued
+        if first_emergency is None:
+            # Missed entirely — no EMERGENCY action issued
             episode_scores.append(0.0)
         else:
-            delay = first_alert - onset
+            delay = first_emergency - onset
             # Base score 0.3 for detecting at all (was 0.5)
             # Tighter delay window: 20 steps (was 40)
             detect_score = 0.3 + 0.7 * max(0.0, 1.0 - delay / 30.0)
 
 
-            # Small bonus for very early ALERT
+            # Small bonus for very early EMERGENCY response
             if delay <= 15:
                 detect_score = min(1.0, detect_score + 0.08)   # was +0.15
             elif delay <= 30:
@@ -130,16 +132,16 @@ def grade_deterioration(stats: dict) -> float:
     detection_score = sum(episode_scores) / len(episode_scores) if episode_scores else 0.0
 
     # ── Step 4: False alarm penalty ──
-    # Only ALERT during STABLE counts as a false alarm (VERIFY is cautious, not a false alarm)
-    stable_steps = sum(1 for c in condition_history if c == PatientCondition.STABLE)
-    false_alerts = 0
+    # Only EMERGENCY during STABLE counts as a false alarm (DISPATCH is cautious, not a false alarm)
+    stable_steps = sum(1 for c in condition_history if c == ZoneCondition.STABLE)
+    false_emergencies = 0
     for action, condition in zip(action_history, condition_history):
-        if condition == PatientCondition.STABLE and action == Action.ALERT:
-            false_alerts += 1
+        if condition == ZoneCondition.STABLE and action == Action.EMERGENCY:
+            false_emergencies += 1
 
     false_alarm_penalty = 0.0
     if stable_steps > 0:
-        false_alarm_rate = false_alerts / stable_steps
+        false_alarm_rate = false_emergencies / stable_steps
         if false_alarm_rate > 0.08:                                    # threshold: 15% → 8%
             false_alarm_penalty = min(0.40, (false_alarm_rate - 0.08) * 1.2)   # cap: 0.25 → 0.40
 

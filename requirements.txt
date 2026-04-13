@@ -1,10 +1,7 @@
 numpy
 pydantic
-openai
+google-generativeai
 gradio
-pyyaml
-setuptools
-wheel
 fastapi
 uvicorn[standard]
 httpx

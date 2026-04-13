@@ -1,6 +1,6 @@
 """
-MediGuard-AI — HuggingFace Spaces App
-FastAPI (REST endpoints for OpenEnv validator) + Gradio (interactive UI)
+HotelGuard-AI — Gradio + FastAPI App
+FastAPI (REST endpoints) + Gradio (interactive UI) for hospitality crisis detection.
 """
 
 import json
@@ -12,24 +12,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from mediguard_env import MediGuardEnv
+from hotelguard_env import HotelGuardEnv
 from inference import (
     baseline_agent, triage_baseline,
     obs_to_user_message, triage_obs_to_message,
-    ACTIVITY_NAMES, IGNORE, VERIFY, ALERT,
-    MODEL_BY_TASK, MODEL_NAME, API_KEY, API_BASE_URL,
+    CONTEXT_NAMES, MONITOR, DISPATCH, EMERGENCY,
+    MODEL_BY_TASK,
     llm_agent, triage_llm_agent,
 )
 
 # ── Token check ────────────────────────────────────────────────────
-_llm_available = API_KEY not in (None, "", "dummy")
+_llm_available = bool(os.getenv("GEMINI_API_KEY"))
 
 # ── Global episode state ───────────────────────────────────────────
-# P1 fix: guard all reads/writes of shared REST state with a lock.
-# Gradio callbacks are single-threaded (GIL-safe via queue), but the
-# FastAPI /reset and /step endpoints are called from async workers and
-# can race each other if the validator retries or sends concurrent
-# requests. The lock prevents _env/_last_obs corruption mid-episode.
 _state_lock   = threading.Lock()
 
 _env          = None
@@ -38,17 +33,17 @@ _step_count   = 0
 _total_reward = 0.0
 _episode_log  = []
 _conv_history = []
-_vitals_history = []
+_signal_history = []
 _last_obs     = None
 
-ACTION_LABELS = {0: "IGNORE", 1: "VERIFY", 2: "ALERT"}
-ACTION_EMOJI  = {0: "😴",     1: "🔍",     2: "🚨"}
-ACTIVITY_EMOJI = {
-    0: "Resting",
-    1: "Eating",
-    2: "Walking",
-    3: "Distressed",
-    4: "Falling",
+ACTION_LABELS = {0: "MONITOR",  1: "DISPATCH",  2: "EMERGENCY"}
+ACTION_EMOJI  = {0: "✅",        1: "👁️",         2: "🚨"}
+CONTEXT_EMOJI = {
+    0: "Quiet Hours",
+    1: "Meal Service",
+    2: "Event",
+    3: "Distress",
+    4: "Emergency",
 }
 
 _agent_choices = ["Rule-Based", "Manual"]
@@ -62,47 +57,48 @@ if _llm_available:
 # Observation formatting
 # ══════════════════════════════════════════════════════════════════
 
-def _risk_tag(delta, spo2, temp):
-    if delta > 0.5 or spo2 < 0.4 or temp > 0.75:
+def _risk_tag(delta, panic, smoke):
+    if delta > 0.5 or panic > 0.6 or smoke > 0.5:
         return "CRITICAL"
-    elif delta > 0.25 or spo2 < 0.6 or temp > 0.55:
+    elif delta > 0.25 or panic > 0.3 or smoke > 0.2:
         return "BORDERLINE"
     return "STABLE"
 
 
 def _fmt_single(obs: dict) -> str:
-    hr    = obs.get("heart_rate",       0)
-    spo2  = obs.get("spo2",            0)
-    bp    = obs.get("systolic_bp",     0)
-    temp  = obs.get("temperature",     0)
-    rr    = obs.get("respiratory_rate", 0)
-    dbp   = obs.get("diastolic_bp",    0)
-    delta = obs.get("baseline_delta",  0)
-    hours = obs.get("hours_observed",  0)
-    act   = ACTIVITY_EMOJI.get(obs.get("activity", 0), "Unknown")
+    motion = obs.get("motion_level",    0)
+    sound  = obs.get("sound_db",        0)
+    doors  = obs.get("door_events",     0)
+    panic  = obs.get("panic_score",     0)
+    occ    = obs.get("occupancy_delta", 0)
+    smoke  = obs.get("smoke_co_level",  0)
+    delta  = obs.get("baseline_delta",  0)
+    hours  = obs.get("hours_observed",  0)
+    ctx    = CONTEXT_EMOJI.get(obs.get("activity", 0), "Unknown")
 
-    hr_raw   = int(30 + hr   * 170)
-    spo2_raw = int(70 + spo2 * 30)
-    bp_raw   = int(60 + bp   * 160)
-    dbp_raw  = int(40 + dbp  * 80)
-    temp_raw = round(34 + temp * 8, 1)
-    rr_raw   = int(5  + rr   * 35)
+    motion_raw = round(motion * 100, 1)
+    sound_raw  = round(30 + sound * 90, 1)
+    doors_raw  = round(doors * 20, 1)
+    panic_raw  = round(panic, 3)
+    occ_raw    = round(occ * 50, 1)
+    smoke_raw  = round(smoke, 3)
 
-    risk     = _risk_tag(delta, spo2, temp)
+    risk     = _risk_tag(delta, panic, smoke)
     risk_map = {"CRITICAL": "[CRITICAL]", "BORDERLINE": "[BORDERLINE]", "STABLE": "[STABLE]"}
 
     lines = [
-        "  PATIENT VITALS",
+        "  ZONE SENSOR READINGS",
         "  " + "─"*40,
-        f"  Heart Rate        {hr_raw:>4} bpm",
-        f"  SpO2              {spo2_raw:>4} %",
-        f"  Blood Pressure    {bp_raw}/{dbp_raw} mmHg",
-        f"  Temperature       {temp_raw} C",
-        f"  Resp Rate         {rr_raw} /min",
+        f"  Motion Level      {motion_raw:>6}",
+        f"  Sound dB          {sound_raw:>6} dB",
+        f"  Door Events       {doors_raw:>6} /min",
+        f"  Panic Score       {panic_raw:>6}",
+        f"  Occupancy Δ       {occ_raw:>6}",
+        f"  Smoke/CO          {smoke_raw:>6}",
         "  " + "─"*40,
         f"  Baseline Delta    {delta:.3f}",
         f"  Time Observed     {hours:.1f} hours",
-        f"  Activity          {act}",
+        f"  Context           {ctx}",
         "  " + "─"*40,
         f"  Status            {risk_map[risk]}",
     ]
@@ -110,23 +106,89 @@ def _fmt_single(obs: dict) -> str:
 
 
 def _fmt_triage(obs_list: list) -> str:
-    lines    = ["  4-PATIENT TRIAGE BOARD", "  " + "─"*42]
+    lines    = ["  4-ZONE TRIAGE BOARD", "  " + "─"*42]
     risk_map = {"CRITICAL": "[CRITICAL]", "BORDERLINE": "[BORDERLINE]", "STABLE": "[STABLE]"}
     for i, obs in enumerate(obs_list):
-        hr    = obs.get("heart_rate",   0)
-        spo2  = obs.get("spo2",         0)
-        temp  = obs.get("temperature",  0)
-        delta = obs.get("baseline_delta", 0)
-        act   = ACTIVITY_EMOJI.get(obs.get("activity", 0), "Unknown")
-        risk  = _risk_tag(delta, spo2, temp)
+        motion = obs.get("motion_level",    0)
+        panic  = obs.get("panic_score",     0)
+        smoke  = obs.get("smoke_co_level",  0)
+        delta  = obs.get("baseline_delta",  0)
+        ctx    = CONTEXT_EMOJI.get(obs.get("activity", 0), "Unknown")
+        risk   = _risk_tag(delta, panic, smoke)
         lines += [
-            f"  Patient {i}  {risk_map[risk]}",
-            f"    HR {int(30+hr*170)} bpm  SpO2 {int(70+spo2*30)}%  "
-            f"Temp {34+temp*8:.1f}C  Delta {delta:.2f}",
-            f"    Activity: {act}",
+            f"  Zone {i}  {risk_map[risk]}",
+            f"    Motion {motion*100:.0f}  Panic {panic:.3f}  "
+            f"Smoke {smoke:.3f}  Delta {delta:.2f}",
+            f"    Context: {ctx}",
             "  " + "─"*40,
         ]
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════
+# Zone Floor Plan (2×2 grid)
+# ══════════════════════════════════════════════════════════════════
+
+def _build_floor_plan(obs_data, actions_taken=None):
+    """Build a 2×2 zone floor plan HTML panel, color-coded by risk level."""
+    if obs_data is None:
+        return '<div style="text-align:center;color:#94a3b8;padding:40px">Reset to see zone floor plan</div>'
+
+    if not isinstance(obs_data, list):
+        obs_data = [obs_data]
+
+    zone_names = ["Lobby", "Restricted Zone", "Silent Room", "Lobby (B)"]
+    if len(obs_data) == 1:
+        zone_names = [_current_task.replace("_", " ").title() if _current_task else "Zone 0"]
+
+    cards = []
+    for i, obs in enumerate(obs_data):
+        panic  = obs.get("panic_score", 0)
+        smoke  = obs.get("smoke_co_level", 0)
+        delta  = obs.get("baseline_delta", 0)
+        motion = obs.get("motion_level", 0)
+        risk   = _risk_tag(delta, panic, smoke)
+
+        color_map = {
+            "STABLE":     ("#dcfce7", "#15803d", "#166534"),
+            "BORDERLINE": ("#fef3c7", "#d97706", "#92400e"),
+            "CRITICAL":   ("#fee2e2", "#dc2626", "#991b1b"),
+        }
+        bg, accent, text = color_map[risk]
+
+        act_emoji = ""
+        if actions_taken is not None:
+            if isinstance(actions_taken, list) and i < len(actions_taken):
+                act_emoji = ACTION_EMOJI.get(actions_taken[i], "")
+            elif not isinstance(actions_taken, list):
+                act_emoji = ACTION_EMOJI.get(actions_taken, "") if i == 0 else ""
+
+        # Top 2 signals: pick panic and smoke as most safety-critical
+        sig1 = f"Panic: {panic:.3f}"
+        sig2 = f"Smoke: {smoke:.3f}"
+
+        name = zone_names[i] if i < len(zone_names) else f"Zone {i}"
+        cards.append(f"""
+        <div style="background:{bg};border:2px solid {accent};border-radius:14px;padding:16px;min-height:100px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <strong style="color:{text};font-family:'Rajdhani',sans-serif;font-size:1.1em">{name}</strong>
+                <span style="font-size:1.3em">{act_emoji}</span>
+            </div>
+            <div style="display:inline-block;background:{accent};color:white;padding:2px 10px;border-radius:20px;font-size:0.78em;font-weight:700;font-family:'JetBrains Mono',monospace;margin-bottom:8px">{risk}</div>
+            <div style="color:{text};font-size:0.85em;font-family:'JetBrains Mono',monospace;line-height:1.6">{sig1}<br>{sig2}</div>
+        </div>
+        """)
+
+    # Arrange as 2×2 grid
+    while len(cards) < 4:
+        cards.append('<div style="border:2px dashed #d0d8f0;border-radius:14px;padding:16px;min-height:100px;display:flex;align-items:center;justify-content:center;color:#94a3b8">—</div>')
+
+    html = f"""
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:4px">
+        {cards[0]}{cards[1]}{cards[2]}{cards[3]}
+    </div>
+    """
+    return html
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -135,12 +197,12 @@ def _fmt_triage(obs_list: list) -> str:
 
 def _agent_action(obs, task, agent_mode):
     if agent_mode == "LLM Agent" and _llm_available:
-        model = MODEL_BY_TASK.get(task, MODEL_NAME)
+        model_name = MODEL_BY_TASK.get(task, "gemini-2.0-flash")
         try:
             if task == "triage":
-                action, reasoning = triage_llm_agent(obs, _conv_history, model)
+                action, reasoning = triage_llm_agent(obs, _conv_history, model_name)
             else:
-                action, reasoning = llm_agent(obs, task, _conv_history, _vitals_history, model)
+                action, reasoning = llm_agent(obs, task, _conv_history, _signal_history, model_name)
             return action, reasoning, True
         except Exception as e:
             err = f"llm_err:{type(e).__name__}"
@@ -152,7 +214,7 @@ def _agent_action(obs, task, agent_mode):
 
 def _compute_score(env, task):
     fn = {
-        "suppression":  env.false_alarm_rate_grader,
+        "suppression":  env.suppression_grader,
         "deterioration": env.deterioration_grader,
         "triage":        env.triage_grader,
     }.get(task)
@@ -165,15 +227,15 @@ def _compute_score(env, task):
 
 def demo_reset(task, seed, agent_mode):
     global _env, _current_task, _step_count, _total_reward
-    global _episode_log, _conv_history, _vitals_history, _last_obs
+    global _episode_log, _conv_history, _signal_history, _last_obs
 
-    _env          = MediGuardEnv(task=task, seed=int(seed))
+    _env          = HotelGuardEnv(task=task, seed=int(seed))
     _current_task = task
     _step_count   = 0
     _total_reward = 0.0
     _episode_log  = []
     _conv_history = []
-    _vitals_history = []
+    _signal_history = []
     obs           = _env.reset()
     _last_obs     = obs
 
@@ -185,10 +247,13 @@ def demo_reset(task, seed, agent_mode):
     difficulty = {"suppression": "Easy", "deterioration": "Medium", "triage": "Hard"}[task]
     status     = f"READY  {task.upper()} [{difficulty}]  Seed {seed}  {agent_mode}"
 
+    floor_plan = _build_floor_plan(obs)
+
     return (
         status, obs_display,
         "—", "—", "—", "0 / 60",
         "\n".join(_episode_log),
+        floor_plan,
         gr.update(interactive=True),
         gr.update(visible=manual and not is_tri),
         gr.update(visible=manual and is_tri),
@@ -197,10 +262,10 @@ def demo_reset(task, seed, agent_mode):
 
 def demo_step(action_radio, triage_txt, agent_mode):
     global _env, _step_count, _total_reward
-    global _episode_log, _conv_history, _vitals_history, _last_obs
+    global _episode_log, _conv_history, _signal_history, _last_obs
 
     if _env is None or _last_obs is None:
-        return ("Reset the environment first!",) + ("",)*6 + ("",) + (gr.update(),)*3
+        return ("Reset the environment first!",) + ("",)*6 + ("",) + ("",) + (gr.update(),)*3
 
     task = _current_task
     obs  = _last_obs
@@ -233,15 +298,15 @@ def demo_step(action_radio, triage_txt, agent_mode):
         obs_text = triage_obs_to_message(
             obs_next if isinstance(obs_next, list) else [obs_next], _conv_history)
     else:
-        obs_text = obs_to_user_message(obs_next, task, _vitals_history, _conv_history)
+        obs_text = obs_to_user_message(obs_next, task, _signal_history, _conv_history)
 
-    hist = obs_next.get("vitals_history", [])
+    hist = obs_next.get("signal_history", []) if not isinstance(obs_next, list) else []
     if hist:
         for entry in reversed(hist):
             if any(v != 0.0 for v in entry):
-                _vitals_history.append(entry)
+                _signal_history.append(entry)
                 break
-    _vitals_history = _vitals_history[-8:]
+    _signal_history = _signal_history[-8:]
 
     _conv_history.append({
         "obs_text": obs_text,
@@ -254,7 +319,7 @@ def demo_step(action_radio, triage_txt, agent_mode):
 
     if isinstance(action, list):
         act_str = " ".join(
-            f"P{i}:{ACTION_EMOJI.get(a,'?')}{ACTION_LABELS.get(a,'?')}"
+            f"Z{i}:{ACTION_EMOJI.get(a,'?')}{ACTION_LABELS.get(a,'?')}"
             for i, a in enumerate(action))
     else:
         act_str = f"{ACTION_EMOJI.get(action,'?')} {ACTION_LABELS.get(action,'?')}"
@@ -268,6 +333,8 @@ def demo_step(action_radio, triage_txt, agent_mode):
     manual = agent_mode == "Manual"
     is_tri = task == "triage"
 
+    floor_plan = _build_floor_plan(obs_next, actions_taken=action)
+
     if done:
         score  = _compute_score(_env, task)
         status = f"COMPLETE  Score: {score:.4f}  Mean Reward: {mean_r:.3f}  Steps: {_step_count}"
@@ -279,6 +346,7 @@ def demo_step(action_radio, triage_txt, agent_mode):
         ]
         return (status, obs_display, act_str, f"{reward:+.3f}", f"{mean_r:.4f}",
                 f"{_step_count}/60", "\n".join(_episode_log[-80:]),
+                floor_plan,
                 gr.update(interactive=False),
                 gr.update(visible=manual and not is_tri),
                 gr.update(visible=manual and is_tri))
@@ -286,6 +354,7 @@ def demo_step(action_radio, triage_txt, agent_mode):
     status = f"Step {_step_count}/60  Last Reward: {reward:+.3f}  Mean: {mean_r:.3f}"
     return (status, obs_display, act_str, f"{reward:+.3f}", f"{mean_r:.4f}",
             f"{_step_count}/60", "\n".join(_episode_log[-80:]),
+            floor_plan,
             gr.update(interactive=True),
             gr.update(visible=manual and not is_tri),
             gr.update(visible=manual and is_tri))
@@ -392,7 +461,7 @@ body,
     color: #bfdbfe !important;
 }
 
-/* VITALS MONITOR */
+/* SENSOR MONITOR */
 .vitals-box textarea,
 .vitals-box input {
     background: #0f172a !important;
@@ -589,17 +658,17 @@ body,
 _llm_pill = (
     '<span class="pill p-llm-on">LLM CONNECTED</span>'
     if _llm_available else
-    '<span class="pill p-llm-off">LLM OFFLINE — set HF_TOKEN</span>'
+    '<span class="pill p-llm-off">LLM OFFLINE — set GEMINI_API_KEY</span>'
 )
 
 HEADER_HTML = f"""
 <div class="app-header">
-  <h1>🏥 MediGuard-AI</h1>
-  <p class="tagline">Context-Aware ICU Patient Monitoring &nbsp;·&nbsp; OpenEnv Hackathon 2026</p>
+  <h1>🏨 HotelGuard-AI</h1>
+  <p class="tagline">Context-Aware Hospitality Crisis Detection &nbsp;·&nbsp; AI Safety Monitoring</p>
   <span class="pill p-green">🟢 Suppression · Easy</span>
   <span class="pill p-yellow">🟡 Deterioration · Medium</span>
   <span class="pill p-red">🔴 Triage · Hard</span>
-  <span class="pill p-white">OpenEnv Spec</span>
+  <span class="pill p-white">Gemini 2.0 Flash</span>
   <span class="pill p-white">NDCG@4</span>
   {_llm_pill}
 </div>
@@ -609,29 +678,29 @@ HOW_INSIGHT_HTML = """
 <div class="hw-card">
   <h3>The Core Insight</h3>
   <p style="color:#374151;line-height:1.7;margin:0 0 16px">
-    Vitals are z-scores from <strong>this patient's own baseline</strong> — not population norms.
-    The same reading means something entirely different depending on what the patient is doing.
+    Sensor signals are z-scores from <strong>this zone's own baseline</strong> — not global norms.
+    The same reading means something entirely different depending on the venue context.
   </p>
   <table style="width:100%;border-collapse:collapse;font-size:0.9em">
     <tr style="border-bottom:2px solid #e5e7eb">
       <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">Situation</th>
-      <th style="text-align:center;padding:8px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">HR 130 bpm</th>
+      <th style="text-align:center;padding:8px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">Sound 95 dB</th>
       <th style="text-align:center;padding:8px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">Correct Action</th>
     </tr>
     <tr style="border-bottom:1px solid #f3f4f6">
-      <td style="padding:10px 6px">🍽 Patient is eating</td>
+      <td style="padding:10px 6px">🎉 Event in progress</td>
       <td style="text-align:center;color:#16a34a;font-weight:700">Expected</td>
-      <td style="text-align:center"><span style="background:#dcfce7;color:#15803d;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">😴 IGNORE</span></td>
+      <td style="text-align:center"><span style="background:#dcfce7;color:#15803d;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">✅ MONITOR</span></td>
     </tr>
     <tr style="border-bottom:1px solid #f3f4f6">
-      <td style="padding:10px 6px">🚶 Patient is walking</td>
+      <td style="padding:10px 6px">🍽 Meal service</td>
       <td style="text-align:center;color:#d97706;font-weight:700">Possible</td>
-      <td style="text-align:center"><span style="background:#fef9c3;color:#a16207;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">🔍 VERIFY</span></td>
+      <td style="text-align:center"><span style="background:#fef9c3;color:#a16207;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">👁️ DISPATCH</span></td>
     </tr>
     <tr>
-      <td style="padding:10px 6px">🛏 Patient is resting</td>
+      <td style="padding:10px 6px">🌙 Quiet hours</td>
       <td style="text-align:center;color:#dc2626;font-weight:700">DANGER</td>
-      <td style="text-align:center"><span style="background:#fee2e2;color:#b91c1c;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">🚨 ALERT</span></td>
+      <td style="text-align:center"><span style="background:#fee2e2;color:#b91c1c;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">🚨 EMERGENCY</span></td>
     </tr>
   </table>
 </div>
@@ -644,7 +713,7 @@ SCORING_HTML = f"""
     <strong style="color:#15803d;font-size:1.05em">🟢 Suppression &nbsp;·&nbsp; Easy</strong>
     <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
       F1 score — harmonic mean of sensitivity and specificity.
-      Ignoring everything gives 0. Alerting everything also penalised.
+      Monitoring everything gives 0. Emergency-calling everything also penalised.
       <br><strong>Baseline ~0.63 &nbsp;·&nbsp; LLM target ~0.80+</strong>
     </p>
   </div>
@@ -652,15 +721,15 @@ SCORING_HTML = f"""
     <strong style="color:#a16207;font-size:1.05em">🟡 Deterioration &nbsp;·&nbsp; Medium</strong>
     <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
       Onset-delay: score = 0.4 + 0.6 × (1 − delay/80).
-      Detect sepsis drift early for high score. Miss it completely → 0.
+      Detect crisis drift early for high score. Miss it completely → 0.
       <br><strong>Baseline ~0.30 &nbsp;·&nbsp; LLM target ~0.55+</strong>
     </p>
   </div>
   <div class="score-block sb-r">
     <strong style="color:#b91c1c;font-size:1.05em">🔴 Triage &nbsp;·&nbsp; Hard</strong>
     <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
-      NDCG@4 (50%) + ALERT-F1 (30%) + Responsiveness (20%) − penalties.
-      Sending VERIFY to every patient is penalised. Must differentiate.
+      NDCG@4 (50%) + EMERGENCY-F1 (30%) + Responsiveness (20%) − penalties.
+      Sending DISPATCH to every zone is penalised. Must differentiate.
       <br><strong>Baseline ~0.22 &nbsp;·&nbsp; LLM target ~0.65+</strong>
     </p>
   </div>
@@ -673,7 +742,7 @@ SCORING_HTML = f"""
 # ══════════════════════════════════════════════════════════════════
 
 with gr.Blocks(
-    title="MediGuard-AI — ICU Monitoring",
+    title="HotelGuard-AI — Hospitality Crisis Detection",
     css=CSS,
     theme=gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
@@ -734,9 +803,9 @@ with gr.Blocks(
                         value=_agent_default,
                         label="Agent Mode",
                         info=(
-                            "HF_TOKEN detected — LLM active"
+                            "GEMINI_API_KEY detected — LLM active"
                             if _llm_available
-                            else "LLM requires HF_TOKEN (not set) — using Rule-Based"
+                            else "LLM requires GEMINI_API_KEY (not set) — using Rule-Based"
                         ),
                     )
                     reset_btn = gr.Button(
@@ -753,16 +822,16 @@ with gr.Blocks(
 
                     with gr.Column(visible=False) as single_action_row:
                         action_radio = gr.Radio(
-                            choices=["0 — 😴 Ignore", "1 — 🔍 Verify", "2 — 🚨 Alert"],
-                            value="1 — 🔍 Verify",
-                            label="Single-Patient Action",
+                            choices=["0 — ✅ Monitor", "1 — 👁️ Dispatch", "2 — 🚨 Emergency"],
+                            value="1 — 👁️ Dispatch",
+                            label="Single-Zone Action",
                         )
 
                     with gr.Column(visible=False) as triage_action_row:
                         triage_txt = gr.Textbox(
                             value="1,0,2,0",
-                            label="Triage Actions [P0, P1, P2, P3]",
-                            info="0=Ignore  1=Verify  2=Alert",
+                            label="Triage Actions [Z0, Z1, Z2, Z3]",
+                            info="0=Monitor  1=Dispatch  2=Emergency",
                         )
 
                     step_btn = gr.Button(
@@ -773,12 +842,19 @@ with gr.Blocks(
                     )
 
                 with gr.Column(scale=2):
+                    # Zone Floor Plan (2×2 grid)
+                    gr.HTML('<div class="sec-h">Zone Floor Plan</div>')
+                    floor_plan_html = gr.HTML(
+                        value='<div style="text-align:center;color:#94a3b8;padding:40px">Reset to see zone floor plan</div>',
+                        elem_id="floor-plan-panel",
+                    )
+
                     obs_out = gr.Textbox(
-                        label="Patient Monitor",
+                        label="Sensor Monitor",
                         lines=15, max_lines=22,
                         interactive=False,
                         elem_classes=["vitals-box"],
-                        placeholder="Reset to see live patient data...",
+                        placeholder="Reset to see live sensor data...",
                     )
                     log_out = gr.Textbox(
                         label="Episode Log",
@@ -792,7 +868,7 @@ with gr.Blocks(
             gr.HTML('<div class="sec-h">Full Inference Pipeline</div>')
             gr.Markdown(
                 "Runs `inference.py` end-to-end (all 3 tasks, LLM agent, ~5–15 min). "
-                "Requires `HF_TOKEN`."
+                "Requires `GEMINI_API_KEY`."
             )
             run_all_btn = gr.Button(
                 "🏃 Run Full Inference (All 3 Tasks)",
@@ -813,30 +889,30 @@ with gr.Blocks(
                     gr.Markdown("""
 ### Three Tasks — Easy to Hard
 
-| Task | Patients | Challenge |
-|------|:--------:|-----------|
-| 🟢 Suppression  | 1 hypertensive | His high BP is *normal* — don't alarm |
-| 🟡 Deterioration | 1 sepsis patient | Catch the trend before crisis |
+| Task | Zones | Challenge |
+|------|:-----:|-----------| 
+| 🟢 Suppression  | 1 event ballroom | High noise is *normal* — don't alarm |
+| 🟡 Deterioration | 1 guest room | Catch the trend before crisis |
 | 🔴 Triage       | 4 simultaneous | Rank by urgency — ordering matters |
 
 ### Action Space `Discrete(3)`
 
 | Code | Action | Use when |
 |:----:|--------|----------|
-| `0` | 😴 IGNORE | Vitals match this patient's normal baseline |
-| `1` | 🔍 VERIFY | Mild deviation — alert the nurse |
-| `2` | 🚨 ALERT  | Genuine emergency — call the doctor now |
+| `0` | ✅ MONITOR  | Zone signals match this zone's normal baseline |
+| `1` | 👁️ DISPATCH | Mild deviation — send staff to investigate |
+| `2` | 🚨 EMERGENCY | Genuine crisis — call emergency services now |
 
-### Observation Fields (10 per patient)
+### Observation Fields (10 per zone)
 
-`heart_rate` · `systolic_bp` · `diastolic_bp` · `spo2` · `respiratory_rate` · `temperature`
-— all normalized 0–1 relative to this patient's 3-hour rolling baseline
+`motion_level` · `sound_db` · `door_events` · `panic_score` · `occupancy_delta` · `smoke_co_level`
+— all normalized 0–1 relative to this zone's rolling baseline
 
 `baseline_delta` — combined deviation score (0 = normal, 1 = extreme)
 
-`hours_observed` · `activity` (0=resting 1=eating 2=walking 3=distressed 4=falling)
+`hours_observed` · `activity` (0=quiet hrs 1=meal 2=event 3=distress 4=emergency)
 
-`vitals_history` — last 10 readings for trend detection
+`signal_history` — last 10 readings for trend detection
 """)
 
                 with gr.Column():
@@ -848,19 +924,14 @@ Task-specific system prompts + 4-turn sliding conversation window for pseudo-onl
 
 ```
 System Prompt  (task rules + thresholds)
-+ Vitals trend table  (last 8 readings)
++ Signal trend table  (last 8 readings)
 + Recent decisions and their rewards
-→ LLM picks: IGNORE / VERIFY / ALERT
+→ LLM picks: MONITOR / DISPATCH / EMERGENCY
 → Falls back to rule-based on any error
 ```
 
-**Models in use:**
-- Suppression   → `{MODEL_NAME}`
-- Deterioration → `{MODEL_NAME}`
-- Triage        → `{MODEL_NAME}`
-
-**LLM:** {"✅ Connected" if _llm_available else "❌ Offline — set `HF_TOKEN`"}
-&nbsp;·&nbsp; **Endpoint:** `{API_BASE_URL}`
+**Model:** Gemini 2.0 Flash
+**LLM:** {"✅ Connected" if _llm_available else "❌ Offline — set `GEMINI_API_KEY`"}
 """)
 
     # ── Event wiring ──────────────────────────────────────────────
@@ -868,6 +939,7 @@ System Prompt  (task rules + thresholds)
         status_out, obs_out,
         metric_action, metric_reward, metric_mean, metric_step,
         log_out,
+        floor_plan_html,
         step_btn,
         single_action_row, triage_action_row,
     ]
@@ -880,113 +952,10 @@ System Prompt  (task rules + thresholds)
 
 
 # ══════════════════════════════════════════════════════════════════
-# FastAPI app — mounts Gradio + exposes OpenEnv REST endpoints
+# FastAPI app — mounts Gradio + exposes REST endpoints
 # ══════════════════════════════════════════════════════════════════
 
-app = FastAPI(title="MediGuard-AI")
-
-
-# ── /reset ────────────────────────────────────────────────────────
-
-@app.post("/reset")
-async def api_reset(request: Request):
-    """OpenEnv-spec reset. Accepts optional {task, seed} JSON body."""
-    global _env, _current_task, _step_count, _total_reward
-    global _episode_log, _conv_history, _vitals_history, _last_obs
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    task = body.get("task", "suppression")
-    seed = int(body.get("seed", 42))
-
-    # P1 fix: acquire lock before touching shared state so a concurrent
-    # /step from a validator retry can't read a half-initialised episode.
-    with _state_lock:
-        _env          = MediGuardEnv(task=task, seed=seed)
-        _current_task = task
-        _step_count   = 0
-        _total_reward = 0.0
-        _episode_log  = []
-        _conv_history = []
-        _vitals_history = []
-        obs           = _env.reset()
-        _last_obs     = obs
-
-    return JSONResponse({
-        "observation": obs if not isinstance(obs, list) else obs,
-        "info":        {"task": task, "seed": seed},
-    })
-
-
-# ── /step ─────────────────────────────────────────────────────────
-
-@app.post("/step")
-async def api_step(request: Request):
-    """OpenEnv-spec step. Accepts {action} JSON body."""
-    global _env, _step_count, _total_reward, _last_obs
-
-    if _env is None:
-        return JSONResponse({"error": "call /reset first"}, status_code=400)
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    action_raw = body.get("action", 1)
-    task       = _current_task or "suppression"
-
-    # Robust action parsing for any format the validator might send
-    try:
-        if task == "triage":
-            if isinstance(action_raw, list):
-                action = [max(0, min(2, int(a))) for a in action_raw]
-            elif isinstance(action_raw, str) and "," in action_raw:
-                action = [max(0, min(2, int(a.strip()))) for a in action_raw.split(",")]
-            elif isinstance(action_raw, (int, float)):
-                action = [max(0, min(2, int(action_raw)))] * 4
-            else:
-                action = [1, 1, 1, 1]
-            while len(action) < 4:
-                action.append(0)
-            action = action[:4]
-        else:
-            if isinstance(action_raw, list):
-                action = max(0, min(2, int(action_raw[0])))
-            elif isinstance(action_raw, str):
-                action = max(0, min(2, int(action_raw.strip())))
-            else:
-                action = max(0, min(2, int(action_raw)))
-    except Exception:
-        action = [1, 1, 1, 1] if task == "triage" else 1
-
-    # P1 fix: lock the entire read-modify-write of the episode state so
-    # concurrent validator retries can't interleave steps from two requests.
-    with _state_lock:
-        obs_next, reward, done, info = _env.step(action)
-        _step_count   += 1
-        _total_reward += reward
-        _last_obs      = obs_next
-
-    return JSONResponse({
-        "observation": obs_next,
-        "reward":      reward,
-        "done":        done,
-        "info":        info,
-    })
-
-
-# ── /state ────────────────────────────────────────────────────────
-
-@app.get("/state")
-async def api_state():
-    """OpenEnv-spec state."""
-    if _env is None:
-        return JSONResponse({"error": "call /reset first"}, status_code=400)
-    return JSONResponse(_env.state())
+app = FastAPI(title="HotelGuard-AI")
 
 
 # ── /health ───────────────────────────────────────────────────────
@@ -1002,10 +971,10 @@ async def api_health():
 async def api_score():
     """Returns current grader scores without running a new episode."""
     if _env is None:
-        return JSONResponse({"error": "call /reset first"}, status_code=400)
+        return JSONResponse({"error": "call reset first"}, status_code=400)
     try:
         scores = {
-            "suppression":   float(_env.false_alarm_rate_grader()) if _current_task == "suppression"  else None,
+            "suppression":   float(_env.suppression_grader()) if _current_task == "suppression"  else None,
             "deterioration": float(_env.deterioration_grader())    if _current_task == "deterioration" else None,
             "triage":        float(_env.triage_grader())           if _current_task == "triage"        else None,
         }
@@ -1027,7 +996,7 @@ def main():
     port = int(os.getenv("PORT", 7860))
     is_hf = os.getenv("SPACE_ID") or os.getenv("HF_SPACE_ID") or os.getenv("SYSTEM_SPACES")
     host  = "0.0.0.0" if is_hf else "127.0.0.1"
-    print(f"[STARTUP] MediGuard-AI starting on {host}:{port}", flush=True)
+    print(f"[STARTUP] HotelGuard-AI starting on {host}:{port}", flush=True)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 if __name__ == "__main__":
