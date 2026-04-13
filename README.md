@@ -1,3 +1,14 @@
+---
+title: HotelGuard AI
+emoji: 🏨
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
+pinned: false
+---
+
 # 🏨 HotelGuard AI
 
 **Context-aware crisis detection and triage for hospitality venues — an AI agent that learns what normal looks like per zone, suppresses false alarms intelligently, and ranks simultaneous incidents so staff respond to the right emergency first.**
@@ -63,7 +74,7 @@ HotelGuard scores signals as deviations from each zone's own rolling baseline �
 
 **Setup:** Four simultaneous zones: lobby (normal), event corridor (elevated but expected), guest room floor (slow deterioration in progress), pool area (healthy baseline). The agent receives all four observations at once and must allocate response correctly.
 
-**Challenge:** This is a ranking problem, not four independent decisions. A VERIFY-everything agent scores ~0.22. Getting it right means comparing zones against each other and escalating the right one.
+**Challenge:** This is a ranking problem, not four independent decisions. A MONITOR-everything agent scores ~0.22. Getting it right means comparing zones against each other and escalating the right one.
 
 **Grader:** Composite score:
 - NDCG@4 (50%) — did the agent rank zones by actual urgency?
@@ -143,6 +154,7 @@ Zone learning:  Correctly monitoring a stable zone after step 20 → +0.2 bonus
 
 ```
 HotelGuard-AI/
+├── app.py                  # Gradio UI + FastAPI dashboard (entry point)
 ├── hotelguard_env.py       # RL environment — reset() / step() / state()
 ├── venue_simulator.py      # Zone signal generator (4 zone types, seeded)
 ├── reward_function.py      # Stateful reward calculator
@@ -150,8 +162,6 @@ HotelGuard-AI/
 ├── task2_deterioration.py  # Grader: onset-delay scoring
 ├── task3_triage.py         # Grader: NDCG@4 + F1 + responsiveness
 ├── inference.py            # Gemini agent + rule-based fallback
-├── server/
-│   └── app.py              # FastAPI + Gradio UI (zone dashboard)
 ├── Dockerfile
 ├── requirements.txt
 └── README.md
@@ -166,10 +176,10 @@ git clone https://github.com/SutikshanUpman/HotelGuard-AI
 cd HotelGuard-AI
 pip install -r requirements.txt
 
-# Run the dashboard
-python server/app.py
+# Run the dashboard (no API key needed — use Rule-Based mode)
+python app.py
 
-# Run inference across all 3 scenarios
+# Run Gemini inference across all 3 scenarios (requires GEMINI_API_KEY)
 python inference.py
 ```
 
@@ -178,6 +188,7 @@ python inference.py
 docker build -t hotelguard-ai .
 docker run -p 7860:7860 \
   -e GEMINI_API_KEY=your_key \
+  -e FIREBASE_URL=your_firebase_url \
   hotelguard-ai
 ```
 
@@ -207,20 +218,20 @@ print(f"Score: {env.triage_grader():.4f}")
 
 | Variable | Required | Description |
 |----------|:--------:|-------------|
-| `GEMINI_API_KEY` | Yes | Google Gemini API key |
+| `GEMINI_API_KEY` | Yes* | Google Gemini API key (*Rule-Based mode works without it) |
 | `FIREBASE_URL` | No | Firebase Realtime DB URL for live streaming |
 
 ---
 
 ## Results
 
-| Scenario | Rule-Based Baseline | HotelGuard AI | Improvement |
-|----------|:-------------------:|:-------------:|:-----------:|
-| Suppression | ~0.58 | ~0.76 | +0.18 |
-| Deterioration | ~0.39 | ~0.61 | +0.22 |
-| Triage | ~0.25 | ~0.66 | +0.41 |
+| Scenario | Rule-Based Baseline | HotelGuard AI (Gemini) | Improvement |
+|----------|:-------------------:|:----------------------:|:-----------:|
+| Suppression (F1) | 0.4188 | — | — |
+| Deterioration (onset-delay) | 0.7533 | — | — |
+| Triage (composite) | 0.2330 | — | — |
 
-*Scores are F1 / onset-delay / composite respectively. Higher is better.*
+*Rule-based baseline verified via local Gradio UI (seed 42). Gemini scores pending — will update after API key test.*
 
 ---
 
