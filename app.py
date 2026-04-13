@@ -424,20 +424,18 @@ def on_task_change(task, agent_mode):
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;600&family=Nunito:wght@400;600;700;800&display=swap');
 
-/* ── FORCE LIGHT BASE — prevents HF dark-mode override ── */
 html, body,
 .gradio-container,
 .gradio-container * {
-    color-scheme: light !important;
+    color-scheme: dark !important;
 }
 body,
 .gradio-container {
-    background: #f0f4ff !important;
+    background: #0f172a !important;
     font-family: 'Nunito', sans-serif !important;
-    color: #1a1f3a !important;
+    color: #e2e8f0 !important;
 }
 
-/* HEADER */
 .app-header {
     background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 50%, #7c3aed 100%);
     border-radius: 20px;
@@ -481,9 +479,7 @@ body,
 .p-llm-on  { background: #dcfce7; color: #15803d !important; }
 .p-llm-off { background: #fee2e2; color: #b91c1c !important; }
 
-/* STATUS BAR */
-.status-bar textarea,
-.status-bar input {
+.status-bar textarea, .status-bar input {
     background: #1e3a8a !important;
     border: 2px solid #3b82f6 !important;
     border-radius: 12px !important;
@@ -493,9 +489,7 @@ body,
     color: #bfdbfe !important;
 }
 
-/* SENSOR MONITOR */
-.vitals-box textarea,
-.vitals-box input {
+.vitals-box textarea, .vitals-box input {
     background: #0f172a !important;
     border: 2px solid #2563eb !important;
     border-radius: 14px !important;
@@ -506,9 +500,7 @@ body,
     line-height: 1.8 !important;
 }
 
-/* EPISODE LOG */
-.log-box textarea,
-.log-box input {
+.log-box textarea, .log-box input {
     background: #f8fafc !important;
     border: 2px solid #cbd5e1 !important;
     border-radius: 14px !important;
@@ -518,9 +510,7 @@ body,
     line-height: 1.6 !important;
 }
 
-/* FULL LOG */
-.full-log textarea,
-.full-log input {
+.full-log textarea, .full-log input {
     background: #fffbeb !important;
     border: 2px solid #fde047 !important;
     border-radius: 14px !important;
@@ -530,7 +520,6 @@ body,
     line-height: 1.6 !important;
 }
 
-/* BUTTONS */
 .btn-reset {
     background: linear-gradient(135deg,#1d4ed8,#4f46e5) !important;
     border: none !important; border-radius: 12px !important;
@@ -557,23 +546,18 @@ body,
     box-shadow: 0 4px 14px rgba(217,119,6,.3) !important;
 }
 
-/* SECTION HEADING */
 .sec-h {
     font-family: 'Rajdhani', sans-serif;
-    font-size: 1.1em;
-    font-weight: 700;
-    color: #1a1f3a !important;
+    font-size: 1.1em; font-weight: 700;
+    color: #e2e8f0 !important;
     border-left: 4px solid #2563eb;
     padding-left: 10px;
     margin: 14px 0 8px;
 }
 
-/* ALL INPUTS / DROPDOWNS — force light bg */
 .gradio-container label,
 .gradio-container .label-wrap span,
-.gradio-container .block {
-    color: #1a1f3a !important;
-}
+.gradio-container .block { color: #1a1f3a !important; }
 .gradio-container input,
 .gradio-container select,
 .gradio-container textarea {
@@ -583,19 +567,14 @@ body,
     background: #ffffff !important;
     color: #1a1f3a !important;
 }
-
-/* Dropdown panel */
 .gradio-container .options,
 .gradio-container ul.options {
     background: #ffffff !important;
     border: 2px solid #d0d8f0 !important;
     color: #1a1f3a !important;
 }
-.gradio-container ul.options li:hover {
-    background: #eff6ff !important;
-}
+.gradio-container ul.options li:hover { background: #eff6ff !important; }
 
-/* TABS */
 .tab-nav { border-bottom: 2px solid #d0d8f0 !important; }
 .tab-nav button {
     font-family: 'Rajdhani', sans-serif !important; font-weight: 600 !important;
@@ -607,7 +586,6 @@ body,
     border-bottom: 2px solid #2563eb !important;
 }
 
-/* RADIO BUTTONS */
 .gradio-container .wrap .wrap-inner label {
     border: 2px solid #d0d8f0 !important;
     border-radius: 10px !important;
@@ -634,18 +612,7 @@ body,
     accent-color: #ffffff !important;
     width: 14px !important; height: 14px !important;
 }
-.gradio-container .wrap .wrap-inner label:has(input[type="radio"]:checked):first-child {
-    background: linear-gradient(135deg, #059669, #10b981) !important;
-    border-color: #059669 !important;
-    box-shadow: 0 2px 10px rgba(5,150,105,0.35) !important;
-}
-.gradio-container .wrap .wrap-inner label:last-child:has(input[type="radio"]:checked) {
-    background: linear-gradient(135deg, #b45309, #d97706) !important;
-    border-color: #b45309 !important;
-    box-shadow: 0 2px 10px rgba(180,83,9,0.35) !important;
-}
 
-/* HOW-IT-WORKS CARDS */
 .hw-card {
     background: #ffffff !important;
     border: 2px solid #d0d8f0;
@@ -655,27 +622,19 @@ body,
 }
 .hw-card h3 {
     font-family: 'Rajdhani', sans-serif;
-    font-size: 1.2em;
-    font-weight: 700;
+    font-size: 1.2em; font-weight: 700;
     color: #2563eb !important;
     margin: 0 0 14px;
 }
-.score-block {
-    border-radius: 12px;
-    padding: 14px 18px;
-    margin-bottom: 10px;
-}
+.score-block { border-radius: 12px; padding: 14px 18px; margin-bottom: 10px; }
 .sb-g { background: #dcfce7 !important; border-left: 5px solid #16a34a; }
 .sb-y { background: #fef9c3 !important; border-left: 5px solid #d97706; }
 .sb-r { background: #fee2e2 !important; border-left: 5px solid #dc2626; }
 
-/* MARKDOWN text inside blocks */
 .gradio-container .prose p,
 .gradio-container .prose li,
 .gradio-container .prose td,
-.gradio-container .prose th {
-    color: #1a1f3a !important;
-}
+.gradio-container .prose th { color: #1a1f3a !important; }
 
 ::-webkit-scrollbar       { width: 5px; }
 ::-webkit-scrollbar-track { background: #e8edf8; }
@@ -774,7 +733,7 @@ SCORING_HTML = f"""
 # ══════════════════════════════════════════════════════════════════
 
 with gr.Blocks(
-    title="HotelGuard-AI — Hospitality Crisis Detection",
+    title="HotelGuard-AI — Hospitality Safety",
     css=CSS,
     theme=gr.themes.Base(
         primary_hue=gr.themes.colors.blue,
