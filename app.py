@@ -8,9 +8,6 @@ import os
 import sys
 import threading
 import gradio as gr
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-import uvicorn
 
 from hotelguard_env import HotelGuardEnv
 from inference import (
@@ -986,53 +983,23 @@ System Prompt  (task rules + thresholds)
     run_all_btn.click(demo_run_all, [agent_radio], [full_log])
 
 
-# ══════════════════════════════════════════════════════════════════
-# FastAPI app — mounts Gradio + exposes REST endpoints
-# ══════════════════════════════════════════════════════════════════
-
-app = FastAPI(title="HotelGuard-AI")
-
-
-# ── /health ───────────────────────────────────────────────────────
-
-@app.get("/health")
-async def api_health():
-    return JSONResponse({"status": "ok", "llm_available": _llm_available})
-
-
-# ── /score ────────────────────────────────────────────────────────
-
-@app.get("/score")
-async def api_score():
-    """Returns current grader scores without running a new episode."""
-    if _env is None:
-        return JSONResponse({"error": "call reset first"}, status_code=400)
-    try:
-        scores = {
-            "suppression":   float(_env.suppression_grader()) if _current_task == "suppression"  else None,
-            "deterioration": float(_env.deterioration_grader())    if _current_task == "deterioration" else None,
-            "triage":        float(_env.triage_grader())           if _current_task == "triage"        else None,
-        }
-        return JSONResponse({"scores": scores, "task": _current_task})
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ── Mount Gradio at root ───────────────────────────────────────────
-
-gradio_app_mounted = gr.mount_gradio_app(app, gradio_app, path="/")
-
 
 # ══════════════════════════════════════════════════════════════════
-# Entry point
+# Entry point — Gradio native launch (no FastAPI mount)
+# gr.mount_gradio_app causes unhashable dict crash on Python 3.13
 # ══════════════════════════════════════════════════════════════════
 
 def main():
-    port = int(os.getenv("PORT", 7860))
-    is_hf = os.getenv("SPACE_ID") or os.getenv("HF_SPACE_ID") or os.getenv("SYSTEM_SPACES")
+    port  = int(os.getenv("PORT", 7860))
+    is_hf = bool(os.getenv("SPACE_ID") or os.getenv("HF_SPACE_ID") or os.getenv("SYSTEM_SPACES"))
     host  = "0.0.0.0" if is_hf else "127.0.0.1"
     print(f"[STARTUP] HotelGuard-AI starting on {host}:{port}", flush=True)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    gradio_app.launch(
+        server_name=host,
+        server_port=port,
+        show_error=True,
+        share=False,
+    )
 
 if __name__ == "__main__":
     main()
