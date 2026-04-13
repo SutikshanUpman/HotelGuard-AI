@@ -30,6 +30,11 @@ _firebase_enabled = False
 
 if _FIREBASE_URL:
     try:
+        # None credentials works for Firebase Realtime Database with default/anonymous
+        # access rules. On HuggingFace Spaces, this may fail silently — that's OK,
+        # _firebase_enabled will stay False and the app works without it.
+        # For full Firebase integration, set GOOGLE_APPLICATION_CREDENTIALS to a
+        # service account JSON path.
         firebase_admin.initialize_app(None, {"databaseURL": _FIREBASE_URL})
         _firebase_enabled = True
     except Exception:
@@ -225,6 +230,7 @@ def _build_floor_plan(obs_data, actions_taken=None):
 # ══════════════════════════════════════════════════════════════════
 
 def _agent_action(obs, task, agent_mode):
+    global _conv_history, _signal_history
     if agent_mode == "LLM Agent" and _llm_available:
         model_name = MODEL_BY_TASK.get(task, "gemini-2.0-flash")
         try:
@@ -705,15 +711,15 @@ SCORING_HTML = f"""
     <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
       F1 score — harmonic mean of sensitivity and specificity.
       Monitoring everything gives 0. Emergency-calling everything also penalised.
-      <br><strong>Baseline ~0.63 &nbsp;·&nbsp; LLM target ~0.80+</strong>
+      <br><strong>Baseline ~0.42 &nbsp;·&nbsp; LLM target ~0.75+</strong>
     </p>
   </div>
   <div class="score-block sb-y">
     <strong style="color:#a16207;font-size:1.05em">🟡 Deterioration &nbsp;·&nbsp; Medium</strong>
     <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
-      Onset-delay: score = 0.4 + 0.6 × (1 − delay/80).
+      Onset-delay: score = 0.3 + 0.7 × (1 − delay/30).
       Detect crisis drift early for high score. Miss it completely → 0.
-      <br><strong>Baseline ~0.30 &nbsp;·&nbsp; LLM target ~0.55+</strong>
+      <br><strong>Baseline ~0.75 &nbsp;·&nbsp; LLM target ~0.85+</strong>
     </p>
   </div>
   <div class="score-block sb-r">
@@ -721,7 +727,7 @@ SCORING_HTML = f"""
     <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
       NDCG@4 (50%) + EMERGENCY-F1 (30%) + Responsiveness (20%) − penalties.
       Sending DISPATCH to every zone is penalised. Must differentiate.
-      <br><strong>Baseline ~0.22 &nbsp;·&nbsp; LLM target ~0.65+</strong>
+      <br><strong>Baseline ~0.23 &nbsp;·&nbsp; LLM target ~0.65+</strong>
     </p>
   </div>
 </div>

@@ -3,6 +3,6 @@ pydantic
 google-genai
 gradio
 httpx
-firebase-admin
+firebase-admin>=6.0
 audioop-lts; python_version>="3.13"
 huggingface_hub

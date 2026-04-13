@@ -53,7 +53,7 @@ HotelGuard scores signals as deviations from each zone's own rolling baseline �
 
 **Grader:** F1 score — harmonic mean of sensitivity (catching the real panic event) and specificity (not firing on wedding noise).
 
-**Score range:** Rule-based ~0.55 · AI target ~0.75+
+**Score range:** Rule-based ~0.42 · AI target ~0.75+
 
 ---
 
@@ -63,9 +63,9 @@ HotelGuard scores signals as deviations from each zone's own rolling baseline �
 
 **Challenge:** Detect the trend early. Single-step thresholds miss this — the individual readings stay within plausible range for many steps. Only an agent reading the signal history table can catch the drift before it becomes a full crisis.
 
-**Grader:** Onset-delay scoring: `score = 0.4 + 0.6 × (1 − delay/30)`. Catching it at step 32 scores near 1.0. Catching it at step 58 scores near 0.4. Missing it entirely scores 0.
+**Grader:** Onset-delay scoring: `score = 0.3 + 0.7 × (1 − delay/30)`. Catching it at step 32 scores near 1.0. Catching it at step 58 scores near 0.4. Missing it entirely scores 0.
 
-**Score range:** Rule-based ~0.30–0.45 · AI target ~0.55+
+**Score range:** Rule-based ~0.75 · AI target ~0.85+
 
 ---
 
@@ -82,7 +82,7 @@ HotelGuard scores signals as deviations from each zone's own rolling baseline �
 - Concentration penalty — same action for every zone is penalised
 - Hesitation penalty — DISPATCH on an EMERGENCY zone wastes critical time
 
-**Score range:** Rule-based ~0.22–0.28 · AI target ~0.65+
+**Score range:** Rule-based ~0.23 · AI target ~0.65+
 
 ---
 
@@ -230,7 +230,7 @@ print(f"Score: {env.triage_grader():.4f}")
 | Deterioration (onset-delay) | 0.7533 | — | — |
 | Triage (composite) | 0.2330 | — | — |
 
-*Rule-based baseline verified via local Gradio UI (seed 42). Gemini scores pending — will update after API key test.*
+*Rule-based baseline verified via local Gradio UI (seed 42). Gemini scores require `GEMINI_API_KEY` — run `python inference.py` to populate.*
 
 ---
 
