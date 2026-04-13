@@ -24,6 +24,38 @@ from inference import (
 # ── Token check ────────────────────────────────────────────────────
 _llm_available = bool(os.getenv("GEMINI_API_KEY"))
 
+# ── Firebase Realtime Database ─────────────────────────────────────
+import firebase_admin
+from firebase_admin import credentials, db as firebase_db
+
+_FIREBASE_URL = os.getenv("FIREBASE_URL")
+_firebase_enabled = False
+
+if _FIREBASE_URL:
+    try:
+        firebase_admin.initialize_app(None, {"databaseURL": _FIREBASE_URL})
+        _firebase_enabled = True
+    except Exception:
+        _firebase_enabled = False
+
+
+def _push_to_firebase(obs, task):
+    if not _firebase_enabled:
+        return
+    try:
+        if isinstance(obs, list):
+            for i, o in enumerate(obs):
+                firebase_db.reference(f"/zones/{task}/{i}/latest").set(
+                    {k: v for k, v in o.items() if k != "signal_history"}
+                )
+        else:
+            firebase_db.reference(f"/zones/{task}/0/latest").set(
+                {k: v for k, v in obs.items() if k != "signal_history"}
+            )
+    except Exception:
+        pass
+
+
 # ── Global episode state ───────────────────────────────────────────
 _state_lock   = threading.Lock()
 
@@ -293,6 +325,9 @@ def demo_step(action_radio, triage_txt, agent_mode):
     _total_reward += reward
     mean_r         = _total_reward / _step_count
     _last_obs      = obs_next
+
+    # ── Push observation to Firebase RTDB ──
+    _push_to_firebase(obs_next, task)
 
     if task == "triage":
         obs_text = triage_obs_to_message(
