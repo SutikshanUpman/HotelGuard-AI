@@ -28,7 +28,14 @@ from hotelguard_env import HotelGuardEnv
 # ------------------------------------------------------------------ #
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY)
+
+def _get_client():
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        return None
+    return genai.Client(api_key=key)
+
+client = _get_client()
 
 # Always attempt LLM if any key is present.
 HAS_API_KEY = bool(GEMINI_API_KEY)
@@ -168,13 +175,17 @@ def llm_agent(obs: Dict, task: str, conversation_history: list,
     system_prompt = SYSTEM_PROMPTS[task]
     user_message = obs_to_user_message(obs, task, signal_history, conversation_history)
 
+    c = client or _get_client()
+    if not c:
+        raise ValueError("no_api_key")
+
     # Build conversation for Gemini
     full_prompt = system_prompt + "\n\n" + user_message
     for entry in conversation_history[-2:]:
         full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
         full_prompt += f"\nYour response: {entry['response']}"
 
-    response = client.models.generate_content(
+    response = c.models.generate_content(
         model=model_name,
         contents=full_prompt,
         config=types.GenerateContentConfig(
@@ -205,12 +216,16 @@ def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
     system_prompt = SYSTEM_PROMPTS["triage"]
     user_message = triage_obs_to_message(obs_list, conversation_history)
 
+    c = client or _get_client()
+    if not c:
+        raise ValueError("no_api_key")
+
     full_prompt = system_prompt + "\n\n" + user_message
     for entry in conversation_history[-2:]:
         full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
         full_prompt += f"\nYour response: {entry['response']}"
 
-    response = client.models.generate_content(
+    response = c.models.generate_content(
         model=model_name,
         contents=full_prompt,
         config=types.GenerateContentConfig(
