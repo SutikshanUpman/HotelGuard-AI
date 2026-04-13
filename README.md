@@ -1,5 +1,5 @@
 ---
-title: MediGuard AI
+title: HotelGuard-AI
 emoji: 🏥
 colorFrom: blue
 colorTo: green
