@@ -1,0 +1,10 @@
+numpy
+pydantic
+openai
+gradio
+pyyaml
+setuptools
+wheel
+fastapi
+uvicorn[standard]
+httpx
