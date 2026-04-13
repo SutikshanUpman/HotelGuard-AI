@@ -12,6 +12,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
 
+import firebase_admin
+from firebase_admin import credentials, db as firebase_db
+
 from hotelguard_env import HotelGuardEnv
 from inference import (
     baseline_agent, triage_baseline,
@@ -23,6 +26,35 @@ from inference import (
 
 # ── Token check ────────────────────────────────────────────────────
 _llm_available = bool(os.getenv("GEMINI_API_KEY"))
+
+# ── Firebase Realtime Database ─────────────────────────────────────
+_FIREBASE_URL = os.getenv("FIREBASE_URL")
+_firebase_enabled = False
+
+if _FIREBASE_URL:
+    try:
+        firebase_admin.initialize_app(None, {"databaseURL": _FIREBASE_URL})
+        _firebase_enabled = True
+    except Exception:
+        _firebase_enabled = False
+
+
+def _push_to_firebase(obs, task):
+    if not _firebase_enabled:
+        return
+    try:
+        if isinstance(obs, list):
+            for i, o in enumerate(obs):
+                firebase_db.reference(f"/zones/{task}/{i}/latest").set(
+                    {k: v for k, v in o.items() if k != "signal_history"}
+                )
+        else:
+            firebase_db.reference(f"/zones/{task}/0/latest").set(
+                {k: v for k, v in obs.items() if k != "signal_history"}
+            )
+    except Exception:
+        pass
+
 
 # ── Global episode state ───────────────────────────────────────────
 _state_lock   = threading.Lock()
@@ -221,6 +253,28 @@ def _compute_score(env, task):
     return float(fn()) if fn else 0.0
 
 
+def _push_to_firebase(obs, task):
+    """Push current observation to Firebase RTDB under /zones/{zone_id}/latest.
+    Skips silently if Firebase is not configured or on any error."""
+    if not _firebase_enabled:
+        return
+    try:
+        if isinstance(obs, list):
+            # Triage: push each zone separately
+            for i, zone_obs in enumerate(obs):
+                payload = {k: v for k, v in zone_obs.items() if k != "signal_history"}
+                payload["task"] = task
+                payload["step"] = _step_count
+                firebase_db.reference(f"/zones/zone_{i}/latest").set(payload)
+        else:
+            payload = {k: v for k, v in obs.items() if k != "signal_history"}
+            payload["task"] = task
+            payload["step"] = _step_count
+            firebase_db.reference("/zones/zone_0/latest").set(payload)
+    except Exception:
+        pass  # fail silently — Firebase is optional
+
+
 # ══════════════════════════════════════════════════════════════════
 # Demo functions (Gradio callbacks)
 # ══════════════════════════════════════════════════════════════════
@@ -293,6 +347,9 @@ def demo_step(action_radio, triage_txt, agent_mode):
     _total_reward += reward
     mean_r         = _total_reward / _step_count
     _last_obs      = obs_next
+
+    # ── Push observation to Firebase RTDB ──
+    _push_to_firebase(obs_next, task)
 
     if task == "triage":
         obs_text = triage_obs_to_message(
