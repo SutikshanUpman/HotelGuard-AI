@@ -7,3 +7,4 @@ uvicorn[standard]
 httpx
 firebase-admin
 audioop-lts; python_version>="3.13"
+huggingface_hub==0.23.4
