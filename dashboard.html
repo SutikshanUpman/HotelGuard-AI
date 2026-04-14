@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HotelGuard AI — Live Floor Monitor</title>
+  <meta name="description" content="Real-time hotel zone monitoring dashboard powered by reinforcement learning. Classifies zones as STABLE, BORDERLINE, or EMERGENCY.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0d0f14;
+      --surface: #141720;
+      --surface2: #1c2030;
+      --ok: #22c97a;
+      --ok-fill: rgba(34,201,122,0.12);
+      --ok-glow: rgba(34,201,122,0.37);
+      --warn: #f0a030;
+      --warn-fill: rgba(240,160,48,0.12);
+      --warn-glow: rgba(240,160,48,0.37);
+      --crit: #e84040;
+      --crit-fill: rgba(232,64,64,0.12);
+      --crit-glow: rgba(232,64,64,0.37);
+      --accent: #4f8ef7;
+      --text: #e8eaf0;
+      --text-dim: #8890a4;
+      --border: #2a2e3a;
+      --font-ui: 'DM Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-ui);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      height: 52px;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .live-indicator {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(34,201,122,0.10);
+      padding: 4px 12px; border-radius: 20px;
+      font-family: var(--font-mono); font-size: 11px;
+      color: var(--ok); font-weight: 500;
+    }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--ok); opacity: 0.3;
+      display: inline-block;
+    }
+    .live-dot.active { animation: live-pulse 2s ease-in-out infinite; opacity: 1; }
+    @keyframes live-pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+    .header-title { font-size: 15px; font-weight: 600; letter-spacing: 0.3px; }
+    .header-title span { color: var(--text-dim); font-weight: 400; }
+    .step-counter { font-family: var(--font-mono); font-size: 13px; color: var(--text-dim); }
+    .step-counter .step-num { color: var(--accent); font-weight: 500; }
+
+    /* ── Main Layout ── */
+    .main-container {
+      display: flex; gap: 14px; padding: 14px;
+      height: calc(100vh - 52px);
+    }
+    .left-column {
+      flex: 1; display: flex; flex-direction: column;
+      gap: 12px; overflow-y: auto; min-width: 0;
+    }
+    .right-column {
+      width: 300px; flex-shrink: 0;
+      display: flex; flex-direction: column; gap: 10px; overflow-y: auto;
+    }
+
+    /* ── Floor Plan ── */
+    .floor-plan-container {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px;
+      position: relative;
+    }
+    .floor-plan-container svg { width: 100%; height: auto; display: block; }
+
+    /* ── Google Map Container ── */
+    #map-container {
+      width: 100%; height: 420px; border-radius: 6px; overflow: hidden;
+    }
+    #map-container.hidden { display: none; }
+
+    /* ── Floating Map Legend ── */
+    .map-legend {
+      position: absolute; bottom: 18px; left: 18px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 14px;
+      display: flex; gap: 16px; z-index: 10;
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+    }
+    .map-legend.hidden { display: none; }
+    .map-legend-item { display: flex; align-items: center; gap: 6px; }
+    .map-legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* ── Map Zone Label Overlays ── */
+    .map-zone-label {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: 3px 8px;
+      font-family: var(--font-mono); font-size: 10px; color: var(--text);
+      white-space: nowrap; pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      text-align: center; line-height: 1.4;
+    }
+    .map-zone-label .zone-label-name {
+      font-family: var(--font-ui); font-weight: 600; font-size: 11px;
+    }
+    .map-zone-label .zone-label-status {
+      font-size: 9px; letter-spacing: 0.5px;
+    }
+
+    /* SVG zone styling via data-status */
+    .zone-group { cursor: pointer; }
+    .zone-group .zone-fill {
+      transition: fill 0.4s, stroke 0.4s;
+      stroke-width: 1.5;
+    }
+    .zone-group:hover .zone-fill { filter: brightness(1.15); }
+    .zone-group.selected .zone-fill { stroke-width: 2.5; }
+
+    .zone-group[data-status="stable"] .zone-fill   { fill: rgba(34,201,122,0.12); stroke: #22c97a; }
+    .zone-group[data-status="borderline"] .zone-fill{ fill: rgba(240,160,48,0.12); stroke: #f0a030; }
+    .zone-group[data-status="emergency"] .zone-fill { fill: rgba(232,64,64,0.12); stroke: #e84040; }
+
+    .zone-group[data-status="stable"] .zone-status-icon,
+    .zone-group[data-status="stable"] .zone-status-text { fill: #22c97a; }
+    .zone-group[data-status="borderline"] .zone-status-icon,
+    .zone-group[data-status="borderline"] .zone-status-text { fill: #f0a030; }
+    .zone-group[data-status="emergency"] .zone-status-icon,
+    .zone-group[data-status="emergency"] .zone-status-text { fill: #e84040; }
+
+    .zone-group[data-status="stable"] .motion-bar,
+    .zone-group[data-status="stable"] .panic-bar    { fill: #22c97a; }
+    .zone-group[data-status="borderline"] .motion-bar,
+    .zone-group[data-status="borderline"] .panic-bar { fill: #f0a030; }
+    .zone-group[data-status="emergency"] .motion-bar,
+    .zone-group[data-status="emergency"] .panic-bar  { fill: #e84040; }
+
+    /* Pulse ring */
+    .pulse-ring {
+      opacity: 0; pointer-events: none;
+      transform-origin: center; transform-box: fill-box;
+    }
+    .zone-group[data-status="emergency"] .pulse-ring {
+      stroke: #e84040;
+      animation: emergency-pulse 1.5s ease-out infinite;
+    }
+    @keyframes emergency-pulse {
+      0%   { opacity: 0.7; transform: scale(0.85); }
+      100% { opacity: 0;   transform: scale(1.4);  }
+    }
+
+    /* ── Legend ── */
+    .legend {
+      display: flex; gap: 24px; padding: 6px 12px;
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* ── Controls ── */
+    .controls { display: flex; flex-direction: column; gap: 8px; }
+    .scenario-select {
+      background: var(--surface2); color: var(--text);
+      border: 1px solid var(--border); padding: 9px 12px;
+      border-radius: 6px; font-family: var(--font-ui); font-size: 13px;
+      cursor: pointer; outline: none; width: 100%;
+      -webkit-appearance: none; appearance: none;
+    }
+    .scenario-select option { background: var(--surface2); color: var(--text); }
+    .run-btn {
+      background: var(--accent); color: #fff; border: none;
+      padding: 10px 16px; border-radius: 6px;
+      font-family: var(--font-ui); font-weight: 600;
+      font-size: 13px; cursor: pointer; width: 100%;
+      letter-spacing: 0.4px; transition: opacity 0.2s;
+    }
+    .run-btn:hover { opacity: 0.85; }
+
+    /* ── Zone Cards ── */
+    .zone-cards { display: flex; flex-direction: column; gap: 8px; }
+    .zone-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px; cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .zone-card:hover { border-color: #3a3e4a; }
+    .zone-card.selected { border-color: var(--accent); background: rgba(79,142,247,0.04); }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .card-zone-name { font-weight: 600; font-size: 13px; }
+    .card-status-badge {
+      font-family: var(--font-mono); font-size: 9px; font-weight: 500;
+      padding: 2px 8px; border-radius: 10px; letter-spacing: 0.5px;
+    }
+    .card-status-badge.stable    { background: rgba(34,201,122,0.12); color: #22c97a; }
+    .card-status-badge.borderline{ background: rgba(240,160,48,0.12); color: #f0a030; }
+    .card-status-badge.emergency { background: rgba(232,64,64,0.12);  color: #e84040; }
+    .card-action { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); margin-bottom: 6px; }
+    .card-action span { color: var(--accent); font-weight: 500; }
+    .card-signals { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px 8px; }
+    .signal-cell { display: flex; flex-direction: column; gap: 1px; }
+    .signal-cell .signal-label {
+      font-family: var(--font-mono); font-size: 7px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .signal-cell .signal-value { font-family: var(--font-mono); font-size: 10px; color: var(--text); font-weight: 500; }
+    .signal-bar { width: 100%; height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+    .signal-bar-fill { height: 100%; border-radius: 2px; transition: width 0.35s ease; min-width: 0; }
+
+    /* ── Detail Panel ── */
+    .detail-panel {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px;
+    }
+    .detail-panel-title {
+      font-size: 11px; font-weight: 600; margin-bottom: 10px;
+      color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px;
+    }
+    .detail-signals { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .detail-signal { display: flex; flex-direction: column; gap: 3px; }
+    .detail-signal-label { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
+    .detail-signal-value { font-family: var(--font-mono); font-size: 15px; font-weight: 500; }
+    .detail-signal-bar { width: 100%; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+    .detail-signal-bar-fill { height: 100%; border-radius: 2px; transition: width 0.35s ease; }
+
+    /* ── Event Log ── */
+    .event-log-container {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px;
+      flex: 1; display: flex; flex-direction: column; min-height: 120px;
+    }
+    .event-log-header {
+      font-size: 11px; font-weight: 600; margin-bottom: 8px;
+      color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px;
+    }
+    .event-log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+    .log-entry {
+      font-family: var(--font-mono); font-size: 10px;
+      padding: 4px 8px; border-radius: 3px; border-left: 3px solid;
+      line-height: 1.4; flex-shrink: 0;
+    }
+    .log-entry.stable    { border-left-color: #22c97a; color: rgba(34,201,122,0.6); }
+    .log-entry.borderline{ border-left-color: #f0a030; color: rgba(240,160,48,0.8); }
+    .log-entry.emergency { border-left-color: #e84040; color: rgba(232,64,64,0.9); background: rgba(232,64,64,0.04); }
+
+    /* ── Results Table ── */
+    .results-section {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px; display: none;
+    }
+    .results-section.visible { display: block; }
+    .results-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+    .results-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; }
+    .results-table th {
+      padding: 10px 16px; text-align: left;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim); font-weight: 500; font-size: 10px;
+      text-transform: uppercase; letter-spacing: 1px;
+    }
+    .results-table td { padding: 10px 16px; border-bottom: 1px solid rgba(42,46,58,0.4); }
+    .results-table td.ai-col { color: var(--accent); font-weight: 600; }
+    .results-table td.improvement { color: var(--ok); font-weight: 500; }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3e4a; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════ HEADER ═══════════ -->
+<header class="header" id="header">
+  <div class="header-left">
+    <div class="live-indicator">
+      <span class="live-dot" id="live-dot"></span>
+      <span id="live-text">READY</span>
+    </div>
+    <h1 class="header-title">HotelGuard AI <span>— Live Floor Monitor</span></h1>
+  </div>
+  <div class="step-counter">
+    Step <span class="step-num" id="step-display">0</span> / 60
+  </div>
+</header>
+
+<!-- ═══════════ MAIN ═══════════ -->
+<main class="main-container">
+
+  <!-- ── Left Column ── -->
+  <section class="left-column">
+    <div class="floor-plan-container">
+      <!-- Google Maps Container -->
+      <div id="map-container" class="hidden"></div>
+
+      <!-- Floating Legend over map -->
+      <div class="map-legend hidden" id="map-legend">
+        <div class="map-legend-item"><span class="map-legend-dot" style="background:#22c97a"></span><span>STABLE</span></div>
+        <div class="map-legend-item"><span class="map-legend-dot" style="background:#f0a030"></span><span>DISPATCH</span></div>
+        <div class="map-legend-item"><span class="map-legend-dot" style="background:#e84040"></span><span>EMERGENCY</span></div>
+      </div>
+
+      <!-- SVG Fallback (shown if Maps API fails) -->
+      <div id="svg-fallback">
+      <svg id="floor-plan" viewBox="0 0 740 540" xmlns="http://www.w3.org/2000/svg"
+           style="stroke-linecap:round;stroke-linejoin:round;">
+
+        <!-- Grid background -->
+        <defs>
+          <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.018)" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+        <rect width="740" height="540" fill="#141720"/>
+        <rect width="740" height="540" fill="url(#grid)"/>
+
+        <!-- Title annotation -->
+        <text x="370" y="26" text-anchor="middle" fill="#4a5060"
+              font-family="'DM Sans',sans-serif" font-weight="600" font-size="11" letter-spacing="2.5">
+          FLOOR 3 — GRAND HARRINGTON HOTEL
+        </text>
+
+        <!-- Building outline -->
+        <rect x="25" y="40" width="690" height="470" fill="none" stroke="#2a2e3a" stroke-width="1.5" rx="2"/>
+
+        <!-- Corridor -->
+        <rect x="320" y="45" width="100" height="460" fill="rgba(13,15,20,0.6)" stroke="none"/>
+        <line x1="370" y1="50" x2="370" y2="500" stroke="#2a2e3a" stroke-width="0.4" stroke-dasharray="5 5"/>
+        <text x="370" y="275" text-anchor="middle" fill="#333844"
+              font-family="'JetBrains Mono',monospace" font-size="9" letter-spacing="3"
+              transform="rotate(-90 370 275)">CORRIDOR</text>
+
+        <!-- Horizontal gap between top/bottom rows -->
+        <rect x="30" y="245" width="680" height="50" fill="rgba(13,15,20,0.3)" stroke="none"/>
+        <line x1="35" y1="270" x2="705" y2="270" stroke="#2a2e3a" stroke-width="0.3" stroke-dasharray="4 4"/>
+
+        <!-- ══ Door indicators ══ -->
+        <g opacity="0.25" fill="none" stroke="#8890a4">
+          <!-- Zone 0 door -->
+          <line x1="314" y1="145" x2="314" y2="170" stroke-width="1.5"/>
+          <path d="M 314 145 Q 328 157 314 170" stroke-width="0.6"/>
+          <!-- Zone 1 door -->
+          <line x1="426" y1="145" x2="426" y2="170" stroke-width="1.5"/>
+          <path d="M 426 145 Q 412 157 426 170" stroke-width="0.6"/>
+          <!-- Zone 2 door -->
+          <line x1="314" y1="370" x2="314" y2="395" stroke-width="1.5"/>
+          <path d="M 314 370 Q 328 382 314 395" stroke-width="0.6"/>
+          <!-- Zone 3 door -->
+          <line x1="426" y1="370" x2="426" y2="395" stroke-width="1.5"/>
+          <path d="M 426 370 Q 412 382 426 395" stroke-width="0.6"/>
+        </g>
+
+        <!-- ══════════ ZONE 0 — Lobby ══════════ -->
+        <g class="zone-group" data-zone="0" data-status="stable">
+          <rect class="pulse-ring" x="30" y="45" width="285" height="195" rx="3" fill="none" stroke-width="2"/>
+          <rect class="zone-fill" x="30" y="45" width="285" height="195" rx="3"/>
+          <!-- Furniture -->
+          <g opacity="0.08" fill="none" stroke="#8890a4" stroke-width="0.7">
+            <rect x="230" y="65" width="60" height="18" rx="2"/>
+            <circle cx="60" cy="210" r="8"/>
+            <circle cx="85" cy="220" r="6"/>
+            <rect x="50" y="185" width="15" height="15" rx="7"/>
+          </g>
+          <!-- Zone label -->
+          <text x="172" y="76" text-anchor="middle" fill="#4a5060"
+                font-family="'JetBrains Mono',monospace" font-size="9" letter-spacing="1.5">ZONE 0</text>
+          <!-- Zone name -->
+          <text x="172" y="102" text-anchor="middle" fill="#e8eaf0"
+                font-family="'DM Sans',sans-serif" font-weight="600" font-size="16">Lobby</text>
+          <!-- Status -->
+          <text class="zone-status-icon" x="148" y="130" text-anchor="middle" font-size="14">✓</text>
+          <text class="zone-status-text" x="198" y="130" text-anchor="middle"
+                font-family="'JetBrains Mono',monospace" font-size="10" font-weight="500">STABLE</text>
+          <!-- MOTION bar -->
+          <text x="52" y="165" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">MOTION</text>
+          <rect x="110" y="158" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="motion-bar" x="110" y="158" width="40" height="6" rx="3"/>
+          <text class="motion-val" x="196" y="165" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">50</text>
+          <!-- PANIC bar -->
+          <text x="52" y="185" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">PANIC</text>
+          <rect x="110" y="178" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="panic-bar" x="110" y="178" width="4" height="6" rx="3"/>
+          <text class="panic-val" x="196" y="185" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">0.05</text>
+        </g>
+
+        <!-- ══════════ ZONE 1 — Event Hall ══════════ -->
+        <g class="zone-group" data-zone="1" data-status="stable">
+          <rect class="pulse-ring" x="425" y="45" width="285" height="195" rx="3" fill="none" stroke-width="2"/>
+          <rect class="zone-fill" x="425" y="45" width="285" height="195" rx="3"/>
+          <!-- Furniture -->
+          <g opacity="0.08" fill="none" stroke="#8890a4" stroke-width="0.7">
+            <rect x="660" y="65" width="35" height="90" rx="2"/>
+            <circle cx="475" cy="210" r="7"/>
+            <circle cx="510" cy="210" r="7"/>
+            <circle cx="545" cy="210" r="7"/>
+            <circle cx="580" cy="210" r="7"/>
+          </g>
+          <text x="567" y="76" text-anchor="middle" fill="#4a5060"
+                font-family="'JetBrains Mono',monospace" font-size="9" letter-spacing="1.5">ZONE 1</text>
+          <text x="567" y="102" text-anchor="middle" fill="#e8eaf0"
+                font-family="'DM Sans',sans-serif" font-weight="600" font-size="16">Event Hall</text>
+          <text class="zone-status-icon" x="543" y="130" text-anchor="middle" font-size="14">✓</text>
+          <text class="zone-status-text" x="593" y="130" text-anchor="middle"
+                font-family="'JetBrains Mono',monospace" font-size="10" font-weight="500">STABLE</text>
+          <text x="447" y="165" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">MOTION</text>
+          <rect x="505" y="158" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="motion-bar" x="505" y="158" width="58" height="6" rx="3"/>
+          <text class="motion-val" x="591" y="165" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">72</text>
+          <text x="447" y="185" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">PANIC</text>
+          <rect x="505" y="178" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="panic-bar" x="505" y="178" width="6" height="6" rx="3"/>
+          <text class="panic-val" x="591" y="185" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">0.08</text>
+        </g>
+
+        <!-- ══════════ ZONE 2 — Guest Room 412 ══════════ -->
+        <g class="zone-group" data-zone="2" data-status="stable">
+          <rect class="pulse-ring" x="30" y="300" width="285" height="195" rx="3" fill="none" stroke-width="2"/>
+          <rect class="zone-fill" x="30" y="300" width="285" height="195" rx="3"/>
+          <!-- Furniture -->
+          <g opacity="0.08" fill="none" stroke="#8890a4" stroke-width="0.7">
+            <rect x="50" y="440" width="60" height="35" rx="3"/>
+            <rect x="50" y="430" width="60" height="10" rx="2"/>
+            <rect x="250" y="320" width="35" height="22" rx="2"/>
+          </g>
+          <text x="172" y="331" text-anchor="middle" fill="#4a5060"
+                font-family="'JetBrains Mono',monospace" font-size="9" letter-spacing="1.5">ZONE 2</text>
+          <text x="172" y="357" text-anchor="middle" fill="#e8eaf0"
+                font-family="'DM Sans',sans-serif" font-weight="600" font-size="15">Guest Room 412</text>
+          <text class="zone-status-icon" x="148" y="385" text-anchor="middle" font-size="14">✓</text>
+          <text class="zone-status-text" x="198" y="385" text-anchor="middle"
+                font-family="'JetBrains Mono',monospace" font-size="10" font-weight="500">STABLE</text>
+          <text x="52" y="418" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">MOTION</text>
+          <rect x="110" y="411" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="motion-bar" x="110" y="411" width="14" height="6" rx="3"/>
+          <text class="motion-val" x="196" y="418" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">18</text>
+          <text x="52" y="438" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">PANIC</text>
+          <rect x="110" y="431" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="panic-bar" x="110" y="431" width="2" height="6" rx="3"/>
+          <text class="panic-val" x="196" y="438" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">0.03</text>
+        </g>
+
+        <!-- ══════════ ZONE 3 — Pool Area ══════════ -->
+        <g class="zone-group" data-zone="3" data-status="stable">
+          <rect class="pulse-ring" x="425" y="300" width="285" height="195" rx="3" fill="none" stroke-width="2"/>
+          <rect class="zone-fill" x="425" y="300" width="285" height="195" rx="3"/>
+          <!-- Furniture -->
+          <g opacity="0.08" fill="none" stroke="#8890a4" stroke-width="0.7">
+            <rect x="450" y="380" width="130" height="70" rx="14"/>
+            <rect x="680" y="385" width="18" height="5" rx="2"/>
+            <rect x="680" y="400" width="18" height="5" rx="2"/>
+            <rect x="680" y="415" width="18" height="5" rx="2"/>
+          </g>
+          <text x="567" y="331" text-anchor="middle" fill="#4a5060"
+                font-family="'JetBrains Mono',monospace" font-size="9" letter-spacing="1.5">ZONE 3</text>
+          <text x="567" y="357" text-anchor="middle" fill="#e8eaf0"
+                font-family="'DM Sans',sans-serif" font-weight="600" font-size="16">Pool Area</text>
+          <text class="zone-status-icon" x="543" y="385" text-anchor="middle" font-size="14">✓</text>
+          <text class="zone-status-text" x="593" y="385" text-anchor="middle"
+                font-family="'JetBrains Mono',monospace" font-size="10" font-weight="500">STABLE</text>
+          <text x="447" y="418" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">MOTION</text>
+          <rect x="505" y="411" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="motion-bar" x="505" y="411" width="32" height="6" rx="3"/>
+          <text class="motion-val" x="591" y="418" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">40</text>
+          <text x="447" y="438" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">PANIC</text>
+          <rect x="505" y="431" width="80" height="6" rx="3" fill="#1c2030"/>
+          <rect class="panic-bar" x="505" y="431" width="3" height="6" rx="3"/>
+          <text class="panic-val" x="591" y="438" fill="#666b7a" font-family="'JetBrains Mono',monospace" font-size="8">0.04</text>
+        </g>
+
+        <!-- Drawing annotation -->
+        <text x="700" y="530" text-anchor="end" fill="#22272e"
+              font-family="'JetBrains Mono',monospace" font-size="7">FP-003-R2 · HotelGuard AI</text>
+        <!-- North indicator -->
+        <g transform="translate(700,55)">
+          <text x="0" y="0" text-anchor="middle" fill="#3a3f50"
+                font-family="'JetBrains Mono',monospace" font-size="8" font-weight="500">N</text>
+          <line x1="0" y1="3" x2="0" y2="12" stroke="#3a3f50" stroke-width="0.7"/>
+          <polygon points="0,2 3,7 -3,7" fill="#3a3f50"/>
+        </g>
+      </svg>
+      </div><!-- /svg-fallback -->
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <div class="legend-item"><span class="legend-dot" style="background:#22c97a"></span><span>STABLE</span></div>
+      <div class="legend-item"><span class="legend-dot" style="background:#f0a030"></span><span>DISPATCH</span></div>
+      <div class="legend-item"><span class="legend-dot" style="background:#e84040"></span><span>EMERGENCY</span></div>
+    </div>
+
+    <!-- Results Table (hidden until sim completes) -->
+    <div class="results-section" id="results-section">
+      <h2 class="results-title">Performance Comparison</h2>
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Rule-Based</th>
+            <th>HotelGuard AI</th>
+            <th>Improvement</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Suppression</td><td>~0.58</td><td class="ai-col">~0.76</td><td class="improvement">+0.18</td></tr>
+          <tr><td>Deterioration</td><td>~0.39</td><td class="ai-col">~0.61</td><td class="improvement">+0.22</td></tr>
+          <tr><td>Triage</td><td>~0.25</td><td class="ai-col">~0.66</td><td class="improvement">+0.41</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Right Column ── -->
+  <aside class="right-column">
+    <div class="controls">
+      <select id="scenario-select" class="scenario-select">
+        <option value="triage">Triage — 4 Zone Simultaneous</option>
+        <option value="suppression">Suppression — Ballroom Event</option>
+        <option value="deterioration">Deterioration — Silent Room</option>
+      </select>
+      <button id="run-btn" class="run-btn">▶ Run Simulation</button>
+    </div>
+
+    <div class="zone-cards" id="zone-cards"></div>
+
+    <div class="detail-panel" id="detail-panel">
+      <div class="detail-panel-title">Signal Breakdown</div>
+      <div class="detail-signals" id="detail-signals"></div>
+    </div>
+
+    <div class="event-log-container">
+      <div class="event-log-header">Event Log</div>
+      <div class="event-log" id="event-log"></div>
+    </div>
+  </aside>
+
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   HotelGuard AI — Simulation Engine & UI Controller
+   ═══════════════════════════════════════════════════════ */
+
+// ── Zone definitions ──
+const ZONES = [
+  { id: 0, name: 'Lobby',          type: 'lobby_normal'   },
+  { id: 1, name: 'Event Hall',     type: 'event_ballroom' },
+  { id: 2, name: 'Guest Room 412', type: 'silent_room'    },
+  { id: 3, name: 'Pool Area',      type: 'pool_area'      }
+];
+
+// ── Zone baseline profiles: [center, jitter] ──
+const ZONE_PROFILES = {
+  lobby_normal:   { motion_level:[50,10], sound_db:[60,8],  door_events:[7,3],  panic_score:[0.05,0.03], occupancy_delta:[25,8],  smoke_co_level:[0.02,0.01] },
+  event_ballroom: { motion_level:[72,12], sound_db:[82,10], door_events:[3,2],  panic_score:[0.08,0.05], occupancy_delta:[40,8],  smoke_co_level:[0.03,0.02] },
+  silent_room:    { motion_level:[18,6],  sound_db:[38,5],  door_events:[1,1],  panic_score:[0.03,0.02], occupancy_delta:[3,2],   smoke_co_level:[0.01,0.01] },
+  pool_area:      { motion_level:[40,8],  sound_db:[65,8],  door_events:[2,1],  panic_score:[0.04,0.03], occupancy_delta:[22,6],  smoke_co_level:[0.02,0.01] }
+};
+
+// ── Signal ranges for normalization ──
+const SIGNAL_RANGES = {
+  motion_level:   [0, 100],
+  sound_db:       [30, 120],
+  door_events:    [0, 20],
+  panic_score:    [0, 1],
+  occupancy_delta:[0, 50],
+  smoke_co_level: [0, 1],
+  baseline_delta: [0, 1]
+};
+
+// ── Display config for sidebar ──
+const SIGNAL_CONFIG = [
+  { key: 'motion_level',   label: 'motion',         range: [0,100],  dec: 0 },
+  { key: 'sound_db',       label: 'sound_db',       range: [30,120], dec: 0 },
+  { key: 'panic_score',    label: 'panic_score',    range: [0,1],    dec: 2 },
+  { key: 'door_events',    label: 'door_events',    range: [0,20],   dec: 0 },
+  { key: 'smoke_co_level', label: 'smoke_co',       range: [0,1],    dec: 2 },
+  { key: 'baseline_delta', label: 'baseline_delta', range: [0,1],    dec: 2 }
+];
+
+const STATUS_COLORS = {
+  STABLE:     '#22c97a',
+  BORDERLINE: '#f0a030',
+  EMERGENCY:  '#e84040'
+};
+const STATUS_ICONS = { STABLE: '✓', BORDERLINE: '!', EMERGENCY: '⚠' };
+const STATUS_ACTIONS = { STABLE: 'MONITOR', BORDERLINE: 'DISPATCH', EMERGENCY: 'EMERGENCY' };
+
+// ── Utilities ──
+function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
+function fmt(v, dec) { return dec > 0 ? v.toFixed(dec) : String(Math.round(v)); }
+
+// ═══════════════════════════════════════════
+//  ZoneSimulator
+// ═══════════════════════════════════════════
+class ZoneSimulator {
+  constructor(scenario) {
+    this.scenario = scenario;
+    this.step = 0;
+    this.baselines = {};
+    this.prevStatuses = {};
+
+    // Store clean baselines (center values, no jitter)
+    for (const z of ZONES) {
+      const profile = ZONE_PROFILES[z.type];
+      const b = {};
+      for (const [k, [center]] of Object.entries(profile)) b[k] = center;
+      this.baselines[z.id] = b;
+      this.prevStatuses[z.id] = 'STABLE';
+    }
+
+    this.zoneStates = this._generate();
+  }
+
+  _genSignals(type) {
+    const profile = ZONE_PROFILES[type];
+    const s = {};
+    for (const [k, [center, jit]] of Object.entries(profile)) {
+      const [lo, hi] = SIGNAL_RANGES[k];
+      s[k] = clamp(center + (Math.random() - 0.5) * 2 * jit, lo, hi);
+    }
+    return s;
+  }
+
+  _applyScenario(s, zoneId, step) {
+    const sc = this.scenario;
+
+    // ── TRIAGE: Zone 2 slow deterioration from step 30 ──
+    if (sc === 'triage' && zoneId === 2 && step >= 30) {
+      const e = step - 30;
+      const base = ZONE_PROFILES.silent_room;
+      s.motion_level   = clamp(base.motion_level[0] - e * 0.5   + rand(-1, 1), 0, 100);
+      s.panic_score    = clamp(base.panic_score[0]  + e * 0.015  + rand(-0.003, 0.003), 0, 1);
+      s.smoke_co_level = clamp(base.smoke_co_level[0] + e * 0.012 + rand(-0.002, 0.002), 0, 1);
+    }
+
+    // ── SUPPRESSION: Zone 1 high noise + panic spike at 35 ──
+    if (sc === 'suppression' && zoneId === 1) {
+      s.motion_level = clamp(s.motion_level + 10, 0, 100);
+      s.sound_db     = clamp(s.sound_db + 15, 30, 120);
+
+      if (step >= 33 && step < 35) {
+        s.panic_score = clamp(0.3 + (step - 33) * 0.15 + rand(-0.02, 0.02), 0, 1);
+      } else if (step >= 35) {
+        const e = step - 35;
+        s.panic_score  = clamp(0.95 + rand(-0.02, 0.02), 0, 1);
+        s.motion_level = clamp(30 - e * 3 + rand(-1, 1), 0, 100);
+        s.sound_db     = clamp(60 - e * 2 + rand(-1, 1), 30, 120);
+      }
+    }
+
+    // ── DETERIORATION: Zone 2 slow drift from step 30 ──
+    if (sc === 'deterioration' && zoneId === 2 && step >= 30) {
+      const e = step - 30;
+      const base = ZONE_PROFILES.silent_room;
+      s.motion_level   = clamp(base.motion_level[0] - e * 1     + rand(-0.5, 0.5), 0, 100);
+      s.smoke_co_level = clamp(base.smoke_co_level[0] + e * 0.015 + rand(-0.002, 0.002), 0, 1);
+      s.panic_score    = clamp(base.panic_score[0]  + e * 0.01   + rand(-0.002, 0.002), 0, 1);
+    }
+
+    return s;
+  }
+
+  _baselineDelta(zoneId, step) {
+    const sc = this.scenario;
+    let d = 0.04 + Math.random() * 0.08; // normal jitter
+
+    if (sc === 'triage' && zoneId === 2 && step >= 30)
+      d = clamp(0.08 + (step - 30) * 0.02, 0, 1);
+    if (sc === 'suppression' && zoneId === 1) {
+      if (step >= 25 && step < 35) d = clamp(0.08 + (step - 25) * 0.018, 0, 0.5);
+      else if (step >= 35)         d = clamp(0.55 + Math.random() * 0.15, 0, 1);
+    }
+    if (sc === 'deterioration' && zoneId === 2 && step >= 30)
+      d = clamp(0.08 + (step - 30) * 0.022, 0, 1);
+
+    return d;
+  }
+
+  _classify(s) {
+    if (s.panic_score > 0.6 || s.smoke_co_level > 0.5 || s.motion_level < 5)
+      return 'EMERGENCY';
+    if (s.baseline_delta < 0.25 && s.panic_score < 0.3 && s.smoke_co_level < 0.2)
+      return 'STABLE';
+    return 'BORDERLINE';
+  }
+
+  _generate() {
+    return ZONES.map(z => {
+      let signals = this._genSignals(z.type);
+      signals = this._applyScenario(signals, z.id, this.step);
+      signals.baseline_delta = this._baselineDelta(z.id, this.step);
+      const status = this._classify(signals);
+      const action = STATUS_ACTIONS[status];
+      const changed = this.prevStatuses[z.id] !== status;
+      this.prevStatuses[z.id] = status;
+      return { ...z, signals, status, action, changed };
+    });
+  }
+
+  advance() {
+    this.step++;
+    this.zoneStates = this._generate();
+    return this.zoneStates;
+  }
+}
+
+// ═══════════════════════════════════════════
+//  UI Controller
+// ═══════════════════════════════════════════
+let simulator = null;
+let simTimer = null;
+let selectedZone = 0;
+let isRunning = false;
+
+// ── Create sidebar zone cards ──
+function createZoneCards() {
+  const container = document.getElementById('zone-cards');
+  container.innerHTML = '';
+  for (const z of ZONES) {
+    const card = document.createElement('div');
+    card.className = 'zone-card' + (z.id === 0 ? ' selected' : '');
+    card.dataset.zone = z.id;
+    card.addEventListener('click', () => selectZone(z.id));
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="card-zone-name">${z.name}</span>
+        <span class="card-status-badge stable">STABLE</span>
+      </div>
+      <div class="card-action">Action: <span>MONITOR</span></div>
+      <div class="card-signals">
+        ${SIGNAL_CONFIG.map(c => `
+          <div class="signal-cell">
+            <span class="signal-label">${c.label}</span>
+            <span class="signal-value">—</span>
+            <div class="signal-bar"><div class="signal-bar-fill"></div></div>
+          </div>`).join('')}
+      </div>`;
+    container.appendChild(card);
+  }
+}
+
+// ── Update a single SVG zone ──
+function updateZoneSVG(zs) {
+  const g = document.querySelector(`.zone-group[data-zone="${zs.id}"]`);
+  if (!g) return;
+
+  const statusKey = zs.status.toLowerCase();
+  g.dataset.status = statusKey;
+
+  const icon = g.querySelector('.zone-status-icon');
+  const text = g.querySelector('.zone-status-text');
+  icon.textContent = STATUS_ICONS[zs.status];
+  text.textContent = zs.status;
+
+  // Motion bar
+  const motionBar = g.querySelector('.motion-bar');
+  const motionVal = g.querySelector('.motion-val');
+  const mPct = clamp(zs.signals.motion_level / 100, 0, 1) * 80;
+  motionBar.setAttribute('width', Math.max(1, mPct));
+  motionVal.textContent = Math.round(zs.signals.motion_level);
+
+  // Panic bar
+  const panicBar = g.querySelector('.panic-bar');
+  const panicVal = g.querySelector('.panic-val');
+  const pPct = clamp(zs.signals.panic_score, 0, 1) * 80;
+  panicBar.setAttribute('width', Math.max(1, pPct));
+  panicVal.textContent = zs.signals.panic_score.toFixed(2);
+}
+
+// ── Update a sidebar card ──
+function updateZoneCard(zs) {
+  const card = document.querySelector(`.zone-card[data-zone="${zs.id}"]`);
+  if (!card) return;
+
+  const badge = card.querySelector('.card-status-badge');
+  badge.textContent = zs.status;
+  badge.className = 'card-status-badge ' + zs.status.toLowerCase();
+
+  const actionSpan = card.querySelector('.card-action span');
+  actionSpan.textContent = zs.action;
+
+  const vals = card.querySelectorAll('.signal-value');
+  const bars = card.querySelectorAll('.signal-bar-fill');
+  const col = STATUS_COLORS[zs.status];
+
+  SIGNAL_CONFIG.forEach((cfg, i) => {
+    const v = zs.signals[cfg.key];
+    vals[i].textContent = fmt(v, cfg.dec);
+    const pct = ((v - cfg.range[0]) / (cfg.range[1] - cfg.range[0])) * 100;
+    bars[i].style.width = clamp(pct, 0, 100) + '%';
+    bars[i].style.background = col;
+  });
+}
+
+// ── Update detail panel ──
+function updateDetailPanel(zoneId) {
+  const panel = document.getElementById('detail-signals');
+  if (!simulator) { panel.innerHTML = ''; return; }
+  const zs = simulator.zoneStates.find(z => z.id === zoneId);
+  if (!zs) return;
+  const col = STATUS_COLORS[zs.status];
+
+  panel.innerHTML = SIGNAL_CONFIG.map(cfg => {
+    const v = zs.signals[cfg.key];
+    const pct = clamp(((v - cfg.range[0]) / (cfg.range[1] - cfg.range[0])) * 100, 0, 100);
+    return `<div class="detail-signal">
+      <span class="detail-signal-label">${cfg.label}</span>
+      <span class="detail-signal-value" style="color:${col}">${fmt(v, cfg.dec)}</span>
+      <div class="detail-signal-bar"><div class="detail-signal-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ── Event log ──
+function addLogEntries(step, states) {
+  const log = document.getElementById('event-log');
+  const pad = String(step).padStart(2, '0');
+
+  let logged = false;
+  for (const zs of states) {
+    if (zs.status !== 'STABLE') {
+      const el = document.createElement('div');
+      el.className = 'log-entry ' + zs.status.toLowerCase();
+
+      let detail = '';
+      if (zs.status === 'EMERGENCY')
+        detail = ` · panic:${zs.signals.panic_score.toFixed(2)} motion:${Math.round(zs.signals.motion_level)}`;
+      else if (zs.status === 'BORDERLINE')
+        detail = ` · Δ:${zs.signals.baseline_delta.toFixed(2)}`;
+
+      el.textContent = `[${pad}] ${zs.name}: ${zs.status}${detail}`;
+      log.appendChild(el);
+      logged = true;
+    }
+  }
+
+  if (!logged && step % 10 === 0) {
+    const el = document.createElement('div');
+    el.className = 'log-entry stable';
+    el.textContent = `[${pad}] All zones nominal`;
+    log.appendChild(el);
+  }
+
+  // Keep last 25 entries
+  while (log.children.length > 25) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ── Select zone ──
+function selectZone(id) {
+  selectedZone = id;
+  document.querySelectorAll('.zone-group').forEach(g => g.classList.remove('selected'));
+  document.querySelector(`.zone-group[data-zone="${id}"]`)?.classList.add('selected');
+  document.querySelectorAll('.zone-card').forEach(c => c.classList.remove('selected'));
+  document.querySelector(`.zone-card[data-zone="${id}"]`)?.classList.add('selected');
+  updateDetailPanel(id);
+}
+
+// ── Master UI update ──
+function updateAllUI(states, step) {
+  document.getElementById('step-display').textContent = step;
+  states.forEach(zs => { updateZoneSVG(zs); updateZoneCard(zs); });
+  updateDetailPanel(selectedZone);
+  addLogEntries(step, states);
+  // Sync Google Maps polygons if available
+  if (typeof updateMapOverlays === 'function') updateMapOverlays(states);
+}
+
+// ── Reset UI ──
+function resetUI() {
+  document.getElementById('event-log').innerHTML = '';
+  document.getElementById('results-section').classList.remove('visible');
+  document.getElementById('step-display').textContent = '0';
+}
+
+// ── Simulation control ──
+function toggleSimulation() {
+  const btn = document.getElementById('run-btn');
+  const dot = document.getElementById('live-dot');
+  const liveText = document.getElementById('live-text');
+
+  // If running → pause
+  if (isRunning && simTimer) {
+    clearInterval(simTimer);
+    simTimer = null;
+    isRunning = false;
+    btn.textContent = '▶ Resume';
+    dot.classList.remove('active');
+    liveText.textContent = 'PAUSED';
+    return;
+  }
+
+  // If completed or fresh → (re)start
+  if (!simulator || simulator.step >= 60) {
+    const scenario = document.getElementById('scenario-select').value;
+    simulator = new ZoneSimulator(scenario);
+    resetUI();
+    updateAllUI(simulator.zoneStates, 0);
+  }
+
+  // Start stepping
+  isRunning = true;
+  btn.textContent = '⏸ Pause';
+  dot.classList.add('active');
+  liveText.textContent = 'LIVE';
+
+  simTimer = setInterval(() => {
+    const states = simulator.advance();
+    updateAllUI(states, simulator.step);
+
+    if (simulator.step >= 60) {
+      clearInterval(simTimer);
+      simTimer = null;
+      isRunning = false;
+      btn.textContent = '▶ Run Again';
+      dot.classList.remove('active');
+      liveText.textContent = 'DONE';
+      document.getElementById('results-section').classList.add('visible');
+    }
+  }, 400);
+}
+
+// ── SVG click handlers ──
+document.querySelectorAll('.zone-group').forEach(g => {
+  g.addEventListener('click', () => selectZone(parseInt(g.dataset.zone)));
+});
+
+// ── Button handler ──
+document.getElementById('run-btn').addEventListener('click', toggleSimulation);
+
+// ── Initialize ──
+document.addEventListener('DOMContentLoaded', () => {
+  createZoneCards();
+  simulator = new ZoneSimulator('triage');
+  updateAllUI(simulator.zoneStates, 0);
+  selectZone(0);
+});
+
+/* ═══════════════════════════════════════════════════════
+   Google Maps Floor Plan Overlay
+   ═══════════════════════════════════════════════════════ */
+
+let gmap = null;
+const mapPolygons = {};   // zone id → google.maps.Polygon
+const mapLabels = {};     // zone id → OverlayView instance
+let mapInitialized = false;
+
+// Center point (New Delhi placeholder)
+const MAP_CENTER = { lat: 28.6139, lng: 77.2090 };
+
+// Zone polygon definitions — 2×2 grid with corridor gap
+const ZONE_COORDS = {
+  0: { // Lobby — top-left
+    name: 'Lobby',
+    paths: [
+      { lat: MAP_CENTER.lat + 0.00004, lng: MAP_CENTER.lng - 0.00010 },
+      { lat: MAP_CENTER.lat + 0.00004, lng: MAP_CENTER.lng - 0.00002 },
+      { lat: MAP_CENTER.lat - 0.00002, lng: MAP_CENTER.lng - 0.00002 },
+      { lat: MAP_CENTER.lat - 0.00002, lng: MAP_CENTER.lng - 0.00010 }
+    ]
+  },
+  1: { // Event Hall — top-right
+    name: 'Event Hall',
+    paths: [
+      { lat: MAP_CENTER.lat + 0.00004, lng: MAP_CENTER.lng + 0.00002 },
+      { lat: MAP_CENTER.lat + 0.00004, lng: MAP_CENTER.lng + 0.00010 },
+      { lat: MAP_CENTER.lat - 0.00002, lng: MAP_CENTER.lng + 0.00010 },
+      { lat: MAP_CENTER.lat - 0.00002, lng: MAP_CENTER.lng + 0.00002 }
+    ]
+  },
+  2: { // Guest Room 412 — bottom-left
+    name: 'Guest Room 412',
+    paths: [
+      { lat: MAP_CENTER.lat - 0.00004, lng: MAP_CENTER.lng - 0.00010 },
+      { lat: MAP_CENTER.lat - 0.00004, lng: MAP_CENTER.lng - 0.00002 },
+      { lat: MAP_CENTER.lat - 0.00010, lng: MAP_CENTER.lng - 0.00002 },
+      { lat: MAP_CENTER.lat - 0.00010, lng: MAP_CENTER.lng - 0.00010 }
+    ]
+  },
+  3: { // Pool Area — bottom-right
+    name: 'Pool Area',
+    paths: [
+      { lat: MAP_CENTER.lat - 0.00004, lng: MAP_CENTER.lng + 0.00002 },
+      { lat: MAP_CENTER.lat - 0.00004, lng: MAP_CENTER.lng + 0.00010 },
+      { lat: MAP_CENTER.lat - 0.00010, lng: MAP_CENTER.lng + 0.00010 },
+      { lat: MAP_CENTER.lat - 0.00010, lng: MAP_CENTER.lng + 0.00002 }
+    ]
+  }
+};
+
+// Dark map style — full dark theme for roadmap (satellite ignores styles)
+const DARK_MAP_STYLES = [
+  { elementType: 'geometry',       stylers: [{ color: '#0d0f14' }] },
+  { elementType: 'labels',         stylers: [{ visibility: 'off' }] },
+  { featureType: 'administrative', stylers: [{ visibility: 'off' }] },
+  { featureType: 'road',           elementType: 'geometry', stylers: [{ color: '#1c2030' }] },
+  { featureType: 'road',           elementType: 'geometry.stroke', stylers: [{ color: '#2a2e3a' }] },
+  { featureType: 'water',          elementType: 'geometry', stylers: [{ color: '#141720' }] },
+  { featureType: 'landscape',      elementType: 'geometry', stylers: [{ color: '#0d0f14' }] },
+  { featureType: 'poi',            stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit',        stylers: [{ visibility: 'off' }] }
+];
+
+function initMap() {
+  try {
+    // Define here so google.maps is guaranteed to exist (API loads async)
+    class ZoneLabelOverlay extends google.maps.OverlayView {
+      constructor(position, name, status) {
+        super();
+        this.position = position;
+        this.name = name;
+        this.status = status;
+        this.div = null;
+      }
+      onAdd() {
+        this.div = document.createElement('div');
+        this.div.className = 'map-zone-label';
+        this.div.innerHTML = `<div class="zone-label-name">${this.name}</div><div class="zone-label-status" style="color:${STATUS_COLORS.STABLE}">${STATUS_ICONS.STABLE} STABLE</div>`;
+        const panes = this.getPanes();
+        panes.overlayLayer.appendChild(this.div);
+      }
+      draw() {
+        const overlayProjection = this.getProjection();
+        const pos = overlayProjection.fromLatLngToDivPixel(this.position);
+        if (this.div) {
+          this.div.style.left = (pos.x - 50) + 'px';
+          this.div.style.top = (pos.y - 18) + 'px';
+          this.div.style.position = 'absolute';
+        }
+      }
+      updateStatus(status) {
+        this.status = status;
+        if (this.div) {
+          const statusEl = this.div.querySelector('.zone-label-status');
+          if (statusEl) {
+            statusEl.style.color = STATUS_COLORS[status];
+            statusEl.textContent = `${STATUS_ICONS[status]} ${status}`;
+          }
+        }
+      }
+      onRemove() {
+        if (this.div) { this.div.parentNode.removeChild(this.div); this.div = null; }
+      }
+    }
+
+    // Store class ref for updateMapOverlays label access
+    window._ZoneLabelOverlay = ZoneLabelOverlay;
+
+    const mapEl = document.getElementById('map-container');
+    const svgFallback = document.getElementById('svg-fallback');
+    const mapLegend = document.getElementById('map-legend');
+
+    gmap = new google.maps.Map(mapEl, {
+      center: MAP_CENTER,
+      zoom: 19,
+      mapTypeId: 'roadmap',
+      tilt: 0,
+      heading: 0,
+      disableDefaultUI: true,
+      styles: DARK_MAP_STYLES
+    });
+
+    // Create zone polygons
+    for (const [id, zone] of Object.entries(ZONE_COORDS)) {
+      const color = STATUS_COLORS.STABLE;
+      const polygon = new google.maps.Polygon({
+        paths: zone.paths,
+        fillColor: color,
+        fillOpacity: 0.3,
+        strokeColor: color,
+        strokeWeight: 2,
+        map: gmap
+      });
+
+      // Click handler: select zone in sidebar
+      polygon.addListener('click', () => selectZone(parseInt(id)));
+      mapPolygons[id] = polygon;
+
+      // Compute centroid for label placement
+      const centroid = zone.paths.reduce((acc, p) => {
+        acc.lat += p.lat / zone.paths.length;
+        acc.lng += p.lng / zone.paths.length;
+        return acc;
+      }, { lat: 0, lng: 0 });
+
+      const label = new ZoneLabelOverlay(
+        new google.maps.LatLng(centroid.lat, centroid.lng),
+        zone.name,
+        'STABLE'
+      );
+      label.setMap(gmap);
+      mapLabels[id] = label;
+    }
+
+    // Hide SVG, show map + legend
+    svgFallback.style.display = 'none';
+    mapEl.classList.remove('hidden');
+    mapLegend.classList.remove('hidden');
+    mapInitialized = true;
+
+  } catch (e) {
+    console.warn('Google Maps failed to initialize, using SVG fallback:', e);
+    // Keep SVG visible, hide map container
+    const mapEl = document.getElementById('map-container');
+    if (mapEl) mapEl.classList.add('hidden');
+    const mapLegend = document.getElementById('map-legend');
+    if (mapLegend) mapLegend.classList.add('hidden');
+  }
+}
+
+// Update polygon colors from simulation state
+function updateMapOverlays(states) {
+  if (!mapInitialized) return;
+  for (const zs of states) {
+    const polygon = mapPolygons[zs.id];
+    const label = mapLabels[zs.id];
+    if (!polygon) continue;
+
+    const color = STATUS_COLORS[zs.status] || STATUS_COLORS.STABLE;
+    polygon.setOptions({
+      fillColor: color,
+      strokeColor: color
+    });
+    if (label) label.updateStatus(zs.status);
+  }
+}
+
+// Fallback: if Maps script fails to load at all, keep SVG visible
+window.gm_authFailure = function() {
+  console.warn('Google Maps auth failure — using SVG fallback');
+  const mapEl = document.getElementById('map-container');
+  if (mapEl) mapEl.classList.add('hidden');
+  const mapLegend = document.getElementById('map-legend');
+  if (mapLegend) mapLegend.classList.add('hidden');
+  const svgFallback = document.getElementById('svg-fallback');
+  if (svgFallback) svgFallback.style.display = '';
+};
+</script>
+
+<!-- Google Maps JS API — replace MAPS_API_KEY_PLACEHOLDER with your key -->
+<script async defer
+  src="https://maps.googleapis.com/maps/api/js?key=MAPS_API_KEY_PLACEHOLDER&callback=initMap"
+  onerror="document.getElementById('map-container').classList.add('hidden');document.getElementById('svg-fallback').style.display='';">
+</script>
+</body>
+</html>

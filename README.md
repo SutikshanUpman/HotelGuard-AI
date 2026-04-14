@@ -145,7 +145,7 @@ Zone learning:  Correctly monitoring a stable zone after step 20 → +0.2 bonus
 | **Gemini API** | Powers the AI triage agent — replaces rule-based thresholds with context-aware reasoning across all three scenarios |
 | **Firebase Realtime Database** | Live sensor event streaming — zone readings flow through Firebase, enabling real-time dashboard updates without polling |
 | **MediaPipe** | Camera-based distress detection — pose landmark model classifies guest activity (standing, lying still, distressed posture) and feeds directly into the `context` observation field |
-| **Google Maps Platform** | Venue floor plan — zones plotted on a hotel map, alert levels shown as color overlays |
+| **Google Maps Platform** | Venue floor plan — 4 hotel zones rendered as live polygons on a dark-styled roadmap, color-coded green/amber/red by zone status and updated every simulation step |
 
 ---
 
@@ -154,6 +154,7 @@ Zone learning:  Correctly monitoring a stable zone after step 20 → +0.2 bonus
 ```
 HotelGuard-AI/
 ├── app.py                  # Gradio UI + FastAPI dashboard (entry point)
+├── dashboard.html          # Standalone live floor monitor (Google Maps overlay)
 ├── hotelguard_env.py       # RL environment — reset() / step() / state()
 ├── venue_simulator.py      # Zone signal generator (4 zone types, seeded)
 ├── reward_function.py      # Stateful reward calculator
