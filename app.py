@@ -16,11 +16,15 @@ try:
 except Exception:
     pass
 
+import os
+import sys
+
 try:
-    with open("dashboard.html", "r", encoding="utf-8") as f:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(base_dir, "dashboard.html"), "r", encoding="utf-8") as f:
         _DASHBOARD_HTML_CONTENT = f.read()
-except Exception:
-    _DASHBOARD_HTML_CONTENT = "<h2>dashboard.html not found</h2>"
+except Exception as e:
+    _DASHBOARD_HTML_CONTENT = f"<h2>dashboard.html not found: {e}</h2>"
 
 from hotelguard_env import HotelGuardEnv
 from inference import (
