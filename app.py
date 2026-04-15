@@ -691,11 +691,6 @@ body,
 .sb-y { background: rgba(217, 119, 6, 0.15) !important; border-left: 5px solid #d97706; }
 .sb-r { background: rgba(220, 38, 38, 0.15) !important; border-left: 5px solid #dc2626; }
 
-.gradio-container .prose p,
-.gradio-container .prose li,
-.gradio-container .prose td,
-.gradio-container .prose th { color: #e2e8f0 !important; }
-
 ::-webkit-scrollbar       { width: 5px; }
 ::-webkit-scrollbar-track { background: #e8edf8; }
 ::-webkit-scrollbar-thumb { background: #d0d8f0; border-radius: 3px; }
@@ -1028,6 +1023,8 @@ def main():
             input_background_fill="#0f172a",
             input_border_color="#334155",
             input_placeholder_color="#64748b",
+            code_background_fill="#1e293b",
+            code_background_fill_dark="#1e293b",
         )
     )
 
