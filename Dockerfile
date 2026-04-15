@@ -16,6 +16,7 @@ COPY task3_triage.py .
 COPY hotelguard_env.py .
 COPY inference.py .
 COPY app.py .
+COPY dashboard.html .
 COPY README.md .
 
 # HotelGuard-AI uses port 7860
