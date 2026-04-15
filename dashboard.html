@@ -960,7 +960,24 @@ function selectZone(id) {
 // ── Master UI update ──
 function updateAllUI(states, step) {
   document.getElementById('step-display').textContent = step;
+  
+  // Update state values
   states.forEach(zs => { updateZoneSVG(zs); updateZoneCard(zs); });
+  
+  // Apply visual rank ordering to sidebar cards using Flexbox order
+  const STATUS_WEIGHT = { EMERGENCY: 3, BORDERLINE: 2, STABLE: 1 };
+  const sortedStates = [...states].sort((a, b) => {
+    if (STATUS_WEIGHT[a.status] !== STATUS_WEIGHT[b.status]) {
+      return STATUS_WEIGHT[b.status] - STATUS_WEIGHT[a.status];
+    }
+    return b.signals.panic_score - a.signals.panic_score;
+  });
+  
+  sortedStates.forEach((zs, idx) => {
+    const card = document.querySelector(`.zone-card[data-zone="${zs.id}"]`);
+    if (card) card.style.order = idx;
+  });
+
   updateDetailPanel(selectedZone);
   addLogEntries(step, states);
   // Sync Google Maps polygons if available

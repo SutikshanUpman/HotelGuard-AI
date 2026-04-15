@@ -72,7 +72,7 @@ Staff Action Interface (Gradio dashboard)
 The key design decision is the hybrid layer: Gemini is only
 called when the condition is ambiguous or trending. Clear
 stable states are handled by the rule-based agent, reducing
-API calls by ~83% without losing detection accuracy on
+API calls by ~83% with minimal loss in detection accuracy on
 real emergencies.
 
 ---

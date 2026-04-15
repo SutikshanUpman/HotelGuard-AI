@@ -217,24 +217,27 @@ def _fmt_triage(obs_list: list) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 def _build_floor_plan(obs_data, actions_taken=None):
-    """Build a 2×2 zone floor plan HTML panel, color-coded by risk level."""
+    """Build a dynamically sorted zone floor plan HTML list, color-coded by risk level."""
     if obs_data is None:
         return '<div style="text-align:center;color:#94a3b8;padding:40px">Reset to see zone floor plan</div>'
 
     if not isinstance(obs_data, list):
         obs_data = [obs_data]
 
-    zone_names = ["Lobby", "Restricted Zone", "Silent Room", "Lobby (B)"]
+    zone_names = ["Lobby", "Event Hall", "Guest Room", "Pool Area"]
     if len(obs_data) == 1:
         zone_names = [_current_task.replace("_", " ").title() if _current_task else "Zone 0"]
 
     cards = []
+    risk_weights = {"CRITICAL": 2, "BORDERLINE": 1, "STABLE": 0}
+
     for i, obs in enumerate(obs_data):
         panic  = obs.get("panic_score", 0)
         smoke  = obs.get("smoke_co_level", 0)
         delta  = obs.get("baseline_delta", 0)
         motion = obs.get("motion_level", 0)
         risk   = _risk_tag(delta, panic, smoke)
+        weight = risk_weights[risk]
 
         color_map = {
             "STABLE":     ("#dcfce7", "#15803d", "#166534"),
@@ -255,7 +258,7 @@ def _build_floor_plan(obs_data, actions_taken=None):
         sig2 = f"Smoke: {smoke:.3f}"
 
         name = zone_names[i] if i < len(zone_names) else f"Zone {i}"
-        cards.append(f"""
+        card_html = f"""
         <div style="background:{bg};border:2px solid {accent};border-radius:14px;padding:16px;min-height:100px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <strong style="color:{text};font-family:'Rajdhani',sans-serif;font-size:1.1em">{name}</strong>
@@ -264,15 +267,27 @@ def _build_floor_plan(obs_data, actions_taken=None):
             <div style="display:inline-block;background:{accent};color:white;padding:2px 10px;border-radius:20px;font-size:0.78em;font-weight:700;font-family:'JetBrains Mono',monospace;margin-bottom:8px">{risk}</div>
             <div style="color:{text};font-size:0.85em;font-family:'JetBrains Mono',monospace;line-height:1.6">{sig1}<br>{sig2}</div>
         </div>
-        """)
+        """
+        cards.append({
+            "html": card_html,
+            "weight": weight,
+            "panic": panic,
+            "delta": delta,
+            "idx": i
+        })
 
-    # Arrange as 2×2 grid
-    while len(cards) < 4:
-        cards.append('<div style="border:2px dashed #d0d8f0;border-radius:14px;padding:16px;min-height:100px;display:flex;align-items:center;justify-content:center;color:#94a3b8">—</div>')
+    # Sort by urgency
+    cards.sort(key=lambda x: (x["weight"], x["panic"], x["delta"]), reverse=True)
+
+    sorted_html = "".join([c["html"] for c in cards])
+
+    # If empty or fewer than expected, pad (though normally 1 or 4)
+    if len(cards) == 0:
+        sorted_html = '<div style="border:2px dashed #d0d8f0;border-radius:14px;padding:16px;min-height:100px;display:flex;align-items:center;justify-content:center;color:#94a3b8">—</div>'
 
     html = f"""
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:4px">
-        {cards[0]}{cards[1]}{cards[2]}{cards[3]}
+    <div style="display:flex;flex-direction:column;gap:12px;padding:4px">
+        {sorted_html}
     </div>
     """
     return html
