@@ -232,7 +232,7 @@ def _build_floor_plan(obs_data, actions_taken=None):
 def _agent_action(obs, task, agent_mode):
     global _conv_history, _signal_history
     if agent_mode == "LLM Agent" and _llm_available:
-        model_name = MODEL_BY_TASK.get(task, "gemini-2.0-flash")
+        model_name = MODEL_BY_TASK.get(task, "gemini-flash-latest")
         try:
             if task == "triage":
                 action, reasoning = triage_llm_agent(obs, _conv_history, model_name)
@@ -665,7 +665,7 @@ HEADER_HTML = f"""
   <span class="pill p-green">🟢 Suppression · Easy</span>
   <span class="pill p-yellow">🟡 Deterioration · Medium</span>
   <span class="pill p-red">🔴 Triage · Hard</span>
-  <span class="pill p-white">Gemini 2.0 Flash</span>
+  <span class="pill p-white">Gemini Flash</span>
   <span class="pill p-white">NDCG@4</span>
   {_llm_pill}
 </div>
