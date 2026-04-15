@@ -9,6 +9,12 @@ import sys
 import threading
 import gradio as gr
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except Exception:
+    pass
+
 from hotelguard_env import HotelGuardEnv
 from inference import (
     baseline_agent, triage_baseline,
@@ -140,23 +146,59 @@ def _fmt_single(obs: dict) -> str:
 
 
 def _fmt_triage(obs_list: list) -> str:
-    lines    = ["  4-ZONE TRIAGE BOARD", "  " + "─"*42]
-    risk_map = {"CRITICAL": "[CRITICAL]", "BORDERLINE": "[BORDERLINE]", "STABLE": "[STABLE]"}
+    zone_names = ["Lobby", "Event Hall", "Guest Room", "Pool Area"]
+    risk_weights = {"CRITICAL": 2, "BORDERLINE": 1, "STABLE": 0}
+    risk_labels = {"CRITICAL": "EMERGENCY", "BORDERLINE": "DISPATCH", "STABLE": "MONITOR"}
+    risk_emoji = {"CRITICAL": "🚨", "BORDERLINE": "⚠️", "STABLE": "✅"}
+    
+    ranked = []
     for i, obs in enumerate(obs_list):
-        motion = obs.get("motion_level",    0)
-        panic  = obs.get("panic_score",     0)
-        smoke  = obs.get("smoke_co_level",  0)
-        delta  = obs.get("baseline_delta",  0)
-        ctx    = CONTEXT_EMOJI.get(obs.get("activity", 0), "Unknown")
+        panic  = obs.get("panic_score", 0)
+        smoke  = obs.get("smoke_co_level", 0)
+        delta  = obs.get("baseline_delta", 0)
         risk   = _risk_tag(delta, panic, smoke)
+        ranked.append({
+            "idx": i,
+            "name": zone_names[i] if i < len(zone_names) else f"Zone {i}",
+            "risk": risk,
+            "weight": risk_weights[risk],
+            "panic": panic,
+            "delta": delta,
+            "obs": obs
+        })
+        
+    # Sort by urgency
+    ranked.sort(key=lambda x: (x["weight"], x["panic"], x["delta"]), reverse=True)
+    
+    shifts = []
+    for r in ranked:
+        tag = risk_labels[r['risk']]
+        shifts.append(f"Zone {r['idx']} ({r['name']}): {tag}")
+        
+    lines = [
+        "  [DYNAMIC TRIAGE RANKING]",
+        "  " + " ➔ ".join(shifts),
+        "  " + "═"*80,
+        "  DETAILED SENSOR FEED"
+    ]
+    
+    for r in ranked:
+        obs = r["obs"]
+        motion = obs.get("motion_level", 0)
+        panic = obs.get("panic_score", 0)
+        smoke = obs.get("smoke_co_level", 0)
+        delta = obs.get("baseline_delta", 0)
+        ctx = CONTEXT_EMOJI.get(obs.get("activity", 0), "Unknown")
+        risk_tag = risk_labels[r["risk"]]
+        emoji = risk_emoji[r["risk"]]
+        
         lines += [
-            f"  Zone {i}  {risk_map[risk]}",
-            f"    Motion {motion*100:.0f}  Panic {panic:.3f}  "
-            f"Smoke {smoke:.3f}  Delta {delta:.2f}",
-            f"    Context: {ctx}",
-            "  " + "─"*40,
+            f"  {emoji} Zone {r['idx']} ({r['name']}) — {risk_tag} ",
+            f"      Activity: {ctx:<12} | Motion: {motion*100:3.0f} | Panic: {panic:.3f} | Smoke: {smoke:.3f} | Δ: {delta:.3f}",
+            "  " + "─"*55,
         ]
-    return "\n".join(lines)
+        
+    return "\n".join(lines).strip()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -619,6 +661,7 @@ body,
     width: 14px !important; height: 14px !important;
 }
 
+
 .hw-card {
     background: #ffffff !important;
     border: 2px solid #d0d8f0;
@@ -740,29 +783,14 @@ SCORING_HTML = f"""
 
 with gr.Blocks(
     title="HotelGuard-AI — Hospitality Safety",
-    css=CSS,
-    theme=gr.themes.Base(
-        primary_hue=gr.themes.colors.blue,
-        secondary_hue=gr.themes.colors.indigo,
-        neutral_hue=gr.themes.colors.slate,
-        font=[gr.themes.GoogleFont("Nunito"), "sans-serif"],
-        font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "monospace"],
-    ).set(
-        body_background_fill="#0f172a",
-        body_text_color="#e2e8f0",
-        background_fill_primary="#1e293b",
-        background_fill_secondary="#0f172a",
-        border_color_primary="#334155",
-        color_accent="#3b82f6",
-        color_accent_soft="#1e3a8a",
-        block_background_fill="#1e293b",
-        block_border_color="#334155",
-        block_label_text_color="#e2e8f0",
-        input_background_fill="#0f172a",
-        input_border_color="#334155",
-        input_placeholder_color="#64748b",
-    ),
 ) as gradio_app:
+
+    if not _llm_available:
+        gr.HTML(
+            '<div style="background:#fee2e2; border: 2px solid #dc2626; color:#991b1b; padding:12px; margin-bottom:15px; border-radius:14px; text-align:center; font-weight:600; font-family:\'Nunito\', sans-serif;">'
+            '⚠️ <span style="font-family:\'JetBrains Mono\',monospace; font-weight:700;">[Rule-Based Mode — API key not set]</span> Offline fallback active. Provide <code>GEMINI_API_KEY</code> for LLM features.'
+            '</div>'
+        )
 
     gr.HTML(HEADER_HTML)
 
@@ -962,6 +990,28 @@ def main():
         server_port=port,
         show_error=True,
         share=False,
+        css=CSS,
+        theme=gr.themes.Base(
+            primary_hue=gr.themes.colors.blue,
+            secondary_hue=gr.themes.colors.indigo,
+            neutral_hue=gr.themes.colors.slate,
+            font=[gr.themes.GoogleFont("Nunito"), "sans-serif"],
+            font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "monospace"],
+        ).set(
+            body_background_fill="#0f172a",
+            body_text_color="#e2e8f0",
+            background_fill_primary="#1e293b",
+            background_fill_secondary="#0f172a",
+            border_color_primary="#334155",
+            color_accent="#3b82f6",
+            color_accent_soft="#1e3a8a",
+            block_background_fill="#1e293b",
+            block_border_color="#334155",
+            block_label_text_color="#e2e8f0",
+            input_background_fill="#0f172a",
+            input_border_color="#334155",
+            input_placeholder_color="#64748b",
+        )
     )
 
 if __name__ == "__main__":

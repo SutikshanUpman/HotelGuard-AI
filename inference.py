@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Dict, List, Tuple, Union
 
@@ -42,17 +43,17 @@ client = _get_client()
 HAS_API_KEY = bool(GEMINI_API_KEY)
 
 MODEL_BY_TASK = {
-    "suppression":   "gemini-2.0-flash",
-    "deterioration": "gemini-2.0-flash",
-    "triage":        "gemini-2.0-flash",
+    "suppression":   "gemini-flash-latest",
+    "deterioration": "gemini-flash-latest",
+    "triage":        "gemini-flash-latest",
 }
 
 # Call the LLM every N steps. Rule-based handles the rest.
-# This reduces 60 API calls/task → ~20, and runtime from ~4 min → ~1.5 min.
-USE_LLM_EVERY_N = 3
+# Emergency Quota Mode: 60 API calls/task → ~10 to stay under 20 RPD.
+USE_LLM_EVERY_N = 6
 
-# Free tier: 15 RPM = 1 call per 4 seconds. Buffer to 4.2s to be safe.
-RATE_LIMIT_DELAY = 4.2
+# Account-specific limit: 5 RPM = 1 call per 12 seconds. Buffer to 12.2s.
+RATE_LIMIT_DELAY = 12.2
 _last_api_call_time: float = 0.0
 
 def wait_if_needed() -> None:
@@ -85,7 +86,7 @@ Rules:
 - MONITOR (0): zone reads normal for its current context
 - DISPATCH (1): something is off — send staff to investigate
 - EMERGENCY (2): genuine crisis — call emergency services NOW
-Respond ONLY with valid JSON: {"action": <0|1|2>, "reason": "<brief>"}"""
+Briefly explain your reasoning, then respond ONLY with valid JSON: {"action": <0|1|2>, "reason": "<brief>"}"""
 
 DETERIORATION_PROMPT = """You are an AI safety agent monitoring a hotel guest room.
 Watch for slow deterioration: motion dropping, door_events stopping, smoke_co_level climbing, panic_score rising. These signals together over multiple steps indicate a medical emergency or early fire buildup.
@@ -94,7 +95,7 @@ Rules:
 - MONITOR (0): readings stable, trend normal
 - DISPATCH (1): trend is concerning — send staff to check
 - EMERGENCY (2): trend indicates imminent crisis — escalate immediately
-Respond ONLY with valid JSON: {"action": <0|1|2>, "reason": "<brief>"}"""
+Briefly explain your reasoning, then respond ONLY with valid JSON: {"action": <0|1|2>, "reason": "<brief>"}"""
 
 TRIAGE_PROMPT = """You are an AI safety agent managing 4 hotel zones simultaneously.
 You receive observations for all 4 zones and must rank them by urgency and allocate responses. This is a RANKING problem — do not apply the same action to every zone. Compare zones against each other.
@@ -103,7 +104,7 @@ Rules:
 - MONITOR (0): zone is stable — no action needed
 - DISPATCH (1): zone is borderline — send staff
 - EMERGENCY (2): zone is in crisis — call emergency services
-Respond ONLY with valid JSON: {"actions": [<0|1|2>, <0|1|2>, <0|1|2>, <0|1|2>], "reason": "<brief>"}"""
+Briefly explain your reasoning, then respond ONLY with valid JSON: {"actions": [<0|1|2>, <0|1|2>, <0|1|2>, <0|1|2>], "reason": "<brief>"}"""
 
 SYSTEM_PROMPTS = {
     "suppression":   SUPPRESSION_PROMPT,
@@ -189,6 +190,23 @@ def triage_obs_to_message(obs_list: List[Dict], conversation_history: list) -> s
 
 def llm_agent(obs: Dict, task: str, conversation_history: list,
               signal_history: list, model_name: str) -> Tuple[int, str]:
+    max_retries = 3
+    retry_delay = 5.0
+    
+    for attempt in range(max_retries):
+        try:
+            return _llm_agent_execution(obs, task, conversation_history, signal_history, model_name)
+        except Exception as e:
+            if "overloaded" in str(e).lower() and attempt < max_retries - 1:
+                print(f"[RETRY] Model overloaded. Retrying in {retry_delay}s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            raise e
+
+
+def _llm_agent_execution(obs: Dict, task: str, conversation_history: list,
+                         signal_history: list, model_name: str) -> Tuple[int, str]:
     system_prompt = SYSTEM_PROMPTS[task]
     user_message = obs_to_user_message(obs, task, signal_history, conversation_history)
 
@@ -208,19 +226,31 @@ def llm_agent(obs: Dict, task: str, conversation_history: list,
         contents=full_prompt,
         config=types.GenerateContentConfig(
             temperature=0.0,
-            max_output_tokens=120,
+            max_output_tokens=2048,
         ),
     )
     raw_response = response.text.strip()
     return _parse_single_response(raw_response)
 
 
+def _extract_json(text: str) -> str:
+    """Finds the first '{' and last '}' to extract a JSON block from raw text."""
+    # First, try to find a markdown block
+    match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
+    # Fallback: Find the outermost braces
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start:end+1].strip()
+    
+    return text
+
+
 def _parse_single_response(raw: str) -> Tuple[int, str]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        inner = "\n".join(lines[1:-1] if len(lines) > 2 else lines[1:])
-        text = inner.strip()
+    text = _extract_json(raw)
     data = json.loads(text)
     action = int(data.get("action", 1))
     reasoning = str(data.get("reason", data.get("reasoning", "")))[:80]
@@ -230,7 +260,24 @@ def _parse_single_response(raw: str) -> Tuple[int, str]:
 
 
 def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
-                     model_name: str) -> Tuple[List[int], str]:
+                      model_name: str) -> Tuple[List[int], str]:
+    max_retries = 2
+    retry_delay = 5.0
+    
+    for attempt in range(max_retries):
+        try:
+            return _triage_llm_agent_execution(obs_list, conversation_history, model_name)
+        except Exception as e:
+            if "overloaded" in str(e).lower() and attempt < max_retries - 1:
+                print(f"[RETRY] Model overloaded. Retrying in {retry_delay}s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            raise e
+
+
+def _triage_llm_agent_execution(obs_list: List[Dict], conversation_history: list,
+                                model_name: str) -> Tuple[List[int], str]:
     system_prompt = SYSTEM_PROMPTS["triage"]
     user_message = triage_obs_to_message(obs_list, conversation_history)
 
@@ -249,7 +296,7 @@ def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
         contents=full_prompt,
         config=types.GenerateContentConfig(
             temperature=0.0,
-            max_output_tokens=120,
+            max_output_tokens=2048,
         ),
     )
     raw_response = response.text.strip()
@@ -257,11 +304,7 @@ def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
 
 
 def _parse_triage_response(raw: str) -> Tuple[List[int], str]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        inner = "\n".join(lines[1:-1] if len(lines) > 2 else lines[1:])
-        text = inner.strip()
+    text = _extract_json(raw)
     data = json.loads(text)
     actions = list(data.get("actions", [0, 0, 0, 0]))
     reasoning = str(data.get("reason", data.get("reasoning", "")))[:100]
@@ -371,7 +414,7 @@ def log_reasoning(action, reasoning: str):
 #  Episode runner                                                     #
 # ------------------------------------------------------------------ #
 def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
-    model_name = MODEL_BY_TASK.get(task, "gemini-2.0-flash")
+    model_name = MODEL_BY_TASK.get(task, "gemini-flash-latest")
     log_start(task, model_name)
     log_agent(model_name)
 
@@ -413,6 +456,8 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
                 except Exception as e:
                     used_fallback = True
                     reasoning = f"error:{type(e).__name__}"
+                    # Print full error for debugging
+                    print(f"[DEBUG] LLM failed at step {steps+1} for task {task}: {e}", flush=True)
 
             if used_fallback or action is None:
                 if task == "triage":
@@ -487,16 +532,17 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
 
 def main():
     key_source = "GEMINI_API_KEY" if os.getenv("GEMINI_API_KEY") else "none"
-    print(f"[CONFIG] api_key_source={key_source} model=gemini-2.0-flash", flush=True)
+    print(f"[CONFIG] api_key_source={key_source} model=gemini-flash-latest", flush=True)
     print(f"[LLM_CHECK] has_key={HAS_API_KEY} client_ready=true", flush=True)
 
     if not HAS_API_KEY:
         print("[INFO] No API key — running fully rule-based (fast mode)", flush=True)
     else:
-        print(f"[INFO] Hybrid mode: gemini-2.0-flash | LLM every {USE_LLM_EVERY_N} steps | 60 steps/task", flush=True)
-        print(f"[INFO] ~{60 // USE_LLM_EVERY_N} API calls/task × {RATE_LIMIT_DELAY}s = ~{60 // USE_LLM_EVERY_N * RATE_LIMIT_DELAY:.0f}s/task", flush=True)
+        print(f"[INFO] Hybrid mode: gemini-flash-latest | LLM every {USE_LLM_EVERY_N} steps | 60 steps/task", flush=True)
+        print(f"[INFO] ~10 API calls/task × {RATE_LIMIT_DELAY}s = ~{10 * RATE_LIMIT_DELAY:.0f}s/task", flush=True)
 
-    tasks = ["suppression", "deterioration", "triage"]
+    # Reminder: change to ["triage"] for Phase 2
+    tasks = ["triage"]
     all_results = {}
 
     for task in tasks:
@@ -514,9 +560,9 @@ def main():
         print(f"  {task:15s}  steps={len(rews):4d}  mean_reward={mean_r:.4f}  score={score:.4f}", flush=True)
     print("=" * 60, flush=True)
 
-    s = all_results["suppression"]["score"]
-    d = all_results["deterioration"]["score"]
-    t = all_results["triage"]["score"]
+    s = all_results.get("suppression", {}).get("score", 0.0)
+    d = all_results.get("deterioration", {}).get("score", 0.0)
+    t = all_results.get("triage", {}).get("score", 0.0)
 
     print(f"\n[SUMMARY] suppression={s:.4f} deterioration={d:.4f} triage={t:.4f}", flush=True)
 
