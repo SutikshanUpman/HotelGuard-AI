@@ -97,11 +97,17 @@ CONTEXT_EMOJI = {
     4: "Emergency",
 }
 
-_agent_choices = ["Rule-Based", "Manual"]
-_agent_default = "Rule-Based"
+import time
+try:
+    with open(os.path.join(base_dir, "results_cache.json"), "r") as f:
+        _CACHE_DATA = json.load(f)
+except Exception:
+    _CACHE_DATA = {}
+
+_agent_choices = ["Simulation Replay (Offline)", "Rule-Based", "Manual"]
+_agent_default = "Simulation Replay (Offline)"
 if _llm_available:
     _agent_choices = ["LLM Agent"] + _agent_choices
-    _agent_default = "LLM Agent"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -298,7 +304,17 @@ def _build_floor_plan(obs_data, actions_taken=None):
 # ══════════════════════════════════════════════════════════════════
 
 def _agent_action(obs, task, agent_mode):
-    global _conv_history, _signal_history
+    global _conv_history, _signal_history, _step_count
+    
+    if agent_mode == "Simulation Replay (Offline)":
+        time.sleep(1.2) # simulated latency
+        try:
+            record = _CACHE_DATA[task]["steps"][_step_count]
+            used_llm = record.get("agent") == "llm"
+            return record["action"], record["reasoning"], used_llm
+        except Exception:
+            pass # fallback to regular agent if cache fails
+
     if agent_mode == "LLM Agent" and _llm_available:
         model_name = MODEL_BY_TASK.get(task, "gemini-flash-latest")
         try:

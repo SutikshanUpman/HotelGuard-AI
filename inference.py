@@ -413,7 +413,7 @@ def log_reasoning(action, reasoning: str):
 # ------------------------------------------------------------------ #
 #  Episode runner                                                     #
 # ------------------------------------------------------------------ #
-def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
+def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float, List[Dict]]:
     model_name = MODEL_BY_TASK.get(task, "gemini-flash-latest")
     log_start(task, model_name)
     log_agent(model_name)
@@ -426,6 +426,7 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
     fallback_count = 0
     conversation_history: List[Dict] = []
     signal_history: List[list] = []
+    episode_records: List[Dict] = []
 
     try:
         env = HotelGuardEnv(task=task, seed=seed)
@@ -456,8 +457,6 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
                 except Exception as e:
                     used_fallback = True
                     reasoning = f"error:{type(e).__name__}"
-                    # Print full error for debugging
-                    print(f"[DEBUG] LLM failed at step {steps+1} for task {task}: {e}", flush=True)
 
             if used_fallback or action is None:
                 if task == "triage":
@@ -468,11 +467,21 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
                 if reasoning != "hybrid_skip":
                     log_fallback(steps + 1, reasoning)
 
+            current_obs = obs
             obs, reward, done, info = env.step(action)
             steps = info["step"]
             rewards.append(reward)
             last_action = action
             last_reasoning = reasoning
+
+            episode_records.append({
+                "step": steps,
+                "obs": current_obs,
+                "action": action,
+                "reward": reward,
+                "reasoning": reasoning,
+                "agent": "rule_based" if used_fallback else "llm"
+            })
 
             # ── LOGGING FOR EVERY STEP ──
             log_step(steps, action, reward, done, error=None)
@@ -524,7 +533,7 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
             flush=True,
         )
 
-    return rewards, score
+    return rewards, score, episode_records
 
 # ------------------------------------------------------------------ #
 #  Entry point                                                        #
@@ -541,13 +550,26 @@ def main():
         print(f"[INFO] Hybrid mode: gemini-flash-latest | LLM every {USE_LLM_EVERY_N} steps | 60 steps/task", flush=True)
         print(f"[INFO] ~10 API calls/task × {RATE_LIMIT_DELAY}s = ~{10 * RATE_LIMIT_DELAY:.0f}s/task", flush=True)
 
-    # Reminder: change to ["triage"] for Phase 2
-    tasks = ["triage"]
+    # Run all tasks for cache generation
+    tasks = ["deterioration", "suppression", "triage"]
     all_results = {}
+    cache_data = {}
 
     for task in tasks:
-        rewards, score = run_episode(task, seed=42)
+        rewards, score, records = run_episode(task, seed=42)
         all_results[task] = {"rewards": rewards, "score": score}
+        cache_data[task] = {
+            "score": score,
+            "steps": records
+        }
+
+    # Save to cache
+    try:
+        with open("results_cache.json", "w") as f:
+            json.dump(cache_data, f, indent=2)
+        print("\n[CACHE] Successfully generated results_cache.json", flush=True)
+    except Exception as e:
+        print(f"\n[CACHE] Failed to save results_cache.json: {e}", flush=True)
 
     print(flush=True)
     print("=" * 60, flush=True)
