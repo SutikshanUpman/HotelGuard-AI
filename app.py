@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import threading
+import html
 import gradio as gr
 
 try:
@@ -14,6 +15,12 @@ try:
     load_dotenv(override=True)
 except Exception:
     pass
+
+try:
+    with open("dashboard.html", "r", encoding="utf-8") as f:
+        _DASHBOARD_HTML_CONTENT = f.read()
+except Exception:
+    _DASHBOARD_HTML_CONTENT = "<h2>dashboard.html not found</h2>"
 
 from hotelguard_env import HotelGuardEnv
 from inference import (
@@ -683,7 +690,7 @@ body,
 .gradio-container .prose p,
 .gradio-container .prose li,
 .gradio-container .prose td,
-.gradio-container .prose th { color: #1a1f3a !important; }
+.gradio-container .prose th { color: #e2e8f0 !important; }
 
 ::-webkit-scrollbar       { width: 5px; }
 ::-webkit-scrollbar-track { background: #e8edf8; }
@@ -787,7 +794,7 @@ with gr.Blocks(
 
     if not _llm_available:
         gr.HTML(
-            '<div style="background:#fee2e2; border: 2px solid #dc2626; color:#991b1b; padding:12px; margin-bottom:15px; border-radius:14px; text-align:center; font-weight:600; font-family:\'Nunito\', sans-serif;">'
+            '<div style="background: rgba(220, 38, 38, 0.15); border: 1px solid rgba(220, 38, 38, 0.4); color:#f87171; padding:12px; margin-bottom:15px; border-radius:14px; text-align:center; font-weight:600; font-family:\'Nunito\', sans-serif;">'
             '⚠️ <span style="font-family:\'JetBrains Mono\',monospace; font-weight:700;">[Rule-Based Mode — API key not set]</span> Offline fallback active. Provide <code>GEMINI_API_KEY</code> for LLM features.'
             '</div>'
         )
@@ -795,6 +802,12 @@ with gr.Blocks(
     gr.HTML(HEADER_HTML)
 
     with gr.Tabs():
+
+        with gr.Tab("🖥️ Simulation Dashboard"):
+            gr.HTML(
+                f'<iframe style="width: 100%; height: 850px; border: none; border-radius: 12px; overflow: hidden;" '
+                f'srcdoc="{html.escape(_DASHBOARD_HTML_CONTENT, quote=True)}"></iframe>'
+            )
 
         # ── TAB 1: PLAY ──────────────────────────────────────────
         with gr.Tab("🎮 Interactive Demo"):
