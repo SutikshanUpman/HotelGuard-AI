@@ -4,8 +4,9 @@ HotelGuard-AI — LLM-Based Inference Script
 Runs an LLM agent (via Google Gemini) against all 3 tasks.
 Falls back to a rule-based baseline agent on API errors or missing key.
 
-Runtime guarantee: 60 steps × 3 tasks × 4s timeout = 720s = 12 min worst case.
-Well within the 30-minute eval time limit.
+Hybrid mode: LLM every 3rd step, rule-based fallback otherwise.
+Runtime: ~20 API calls/task × 4.2s = ~84s/task ≈ 4.5 min total.
+Well within the 30-minute eval time limit and free-tier 15 RPM.
 
 Environment variables:
   GEMINI_API_KEY — Google Gemini authentication token
@@ -45,6 +46,22 @@ MODEL_BY_TASK = {
     "deterioration": "gemini-2.0-flash",
     "triage":        "gemini-2.0-flash",
 }
+
+# Call the LLM every N steps. Rule-based handles the rest.
+# This reduces 60 API calls/task → ~20, and runtime from ~4 min → ~1.5 min.
+USE_LLM_EVERY_N = 3
+
+# Free tier: 15 RPM = 1 call per 4 seconds. Buffer to 4.2s to be safe.
+RATE_LIMIT_DELAY = 4.2
+_last_api_call_time: float = 0.0
+
+def wait_if_needed() -> None:
+    """Block until enough time has passed since the last Gemini API call."""
+    global _last_api_call_time
+    elapsed = time.time() - _last_api_call_time
+    if elapsed < RATE_LIMIT_DELAY:
+        time.sleep(RATE_LIMIT_DELAY - elapsed)
+    _last_api_call_time = time.time()
 
 MONITOR   = 0
 DISPATCH  = 1
@@ -185,6 +202,7 @@ def llm_agent(obs: Dict, task: str, conversation_history: list,
         full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
         full_prompt += f"\nYour response: {entry['response']}"
 
+    wait_if_needed()
     response = c.models.generate_content(
         model=model_name,
         contents=full_prompt,
@@ -225,6 +243,7 @@ def triage_llm_agent(obs_list: List[Dict], conversation_history: list,
         full_prompt += f"\n\nPrevious observation:\n{entry['obs_text'][:500]}"
         full_prompt += f"\nYour response: {entry['response']}"
 
+    wait_if_needed()
     response = c.models.generate_content(
         model=model_name,
         contents=full_prompt,
@@ -378,6 +397,10 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
             if not HAS_API_KEY:
                 used_fallback = True
                 reasoning = "no_api_key"
+            elif steps % USE_LLM_EVERY_N != 0:
+                # Non-LLM step — use rule-based to conserve API quota
+                used_fallback = True
+                reasoning = "hybrid_skip"
             else:
                 try:
                     if task == "triage":
@@ -397,7 +420,8 @@ def run_episode(task: str, seed: int = 42) -> Tuple[List[float], float]:
                 else:
                     action = baseline_agent(obs)
                 fallback_count += 1
-                log_fallback(steps + 1, reasoning)
+                if reasoning != "hybrid_skip":
+                    log_fallback(steps + 1, reasoning)
 
             obs, reward, done, info = env.step(action)
             steps = info["step"]
@@ -469,8 +493,8 @@ def main():
     if not HAS_API_KEY:
         print("[INFO] No API key — running fully rule-based (fast mode)", flush=True)
     else:
-        print(f"[INFO] LLM mode: gemini-2.0-flash | 60 steps/task | 4s timeout", flush=True)
-        print(f"[INFO] Worst-case runtime: 60 x 3 x 4s = 720s = 12 min", flush=True)
+        print(f"[INFO] Hybrid mode: gemini-2.0-flash | LLM every {USE_LLM_EVERY_N} steps | 60 steps/task", flush=True)
+        print(f"[INFO] ~{60 // USE_LLM_EVERY_N} API calls/task × {RATE_LIMIT_DELAY}s = ~{60 // USE_LLM_EVERY_N * RATE_LIMIT_DELAY:.0f}s/task", flush=True)
 
     tasks = ["suppression", "deterioration", "triage"]
     all_results = {}
