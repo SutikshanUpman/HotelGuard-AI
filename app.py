@@ -674,8 +674,8 @@ body,
 
 
 .hw-card {
-    background: #ffffff !important;
-    border: 2px solid #d0d8f0;
+    background: #1e293b !important;
+    border: 2px solid #334155;
     border-radius: 16px;
     padding: 22px 26px;
     margin-bottom: 14px;
@@ -683,13 +683,13 @@ body,
 .hw-card h3 {
     font-family: 'Rajdhani', sans-serif;
     font-size: 1.2em; font-weight: 700;
-    color: #2563eb !important;
+    color: #3b82f6 !important;
     margin: 0 0 14px;
 }
 .score-block { border-radius: 12px; padding: 14px 18px; margin-bottom: 10px; }
-.sb-g { background: #dcfce7 !important; border-left: 5px solid #16a34a; }
-.sb-y { background: #fef9c3 !important; border-left: 5px solid #d97706; }
-.sb-r { background: #fee2e2 !important; border-left: 5px solid #dc2626; }
+.sb-g { background: rgba(22, 163, 74, 0.15) !important; border-left: 5px solid #16a34a; }
+.sb-y { background: rgba(217, 119, 6, 0.15) !important; border-left: 5px solid #d97706; }
+.sb-r { background: rgba(220, 38, 38, 0.15) !important; border-left: 5px solid #dc2626; }
 
 .gradio-container .prose p,
 .gradio-container .prose li,
@@ -728,30 +728,30 @@ HEADER_HTML = f"""
 HOW_INSIGHT_HTML = """
 <div class="hw-card">
   <h3>The Core Insight</h3>
-  <p style="color:#374151;line-height:1.7;margin:0 0 16px">
-    Sensor signals are z-scores from <strong>this zone's own baseline</strong> — not global norms.
+  <p style="color:#cbd5e1;line-height:1.7;margin:0 0 16px">
+    Sensor signals are z-scores from <strong style="color:#f1f5f9;">this zone's own baseline</strong> — not global norms.
     The same reading means something entirely different depending on the venue context.
   </p>
-  <table style="width:100%;border-collapse:collapse;font-size:0.9em">
-    <tr style="border-bottom:2px solid #e5e7eb">
-      <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">Situation</th>
-      <th style="text-align:center;padding:8px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">Sound 95 dB</th>
-      <th style="text-align:center;padding:8px;color:#6b7280;font-size:0.83em;font-family:JetBrains Mono,monospace">Correct Action</th>
+  <table style="width:100%;border-collapse:collapse;font-size:0.9em;color:#e2e8f0;">
+    <tr style="border-bottom:2px solid #334155">
+      <th style="text-align:left;padding:8px 6px;color:#94a3b8;font-size:0.83em;font-family:JetBrains Mono,monospace">Situation</th>
+      <th style="text-align:center;padding:8px;color:#94a3b8;font-size:0.83em;font-family:JetBrains Mono,monospace">Sound 95 dB</th>
+      <th style="text-align:center;padding:8px;color:#94a3b8;font-size:0.83em;font-family:JetBrains Mono,monospace">Correct Action</th>
     </tr>
-    <tr style="border-bottom:1px solid #f3f4f6">
+    <tr style="border-bottom:1px solid #1e293b">
       <td style="padding:10px 6px">🎉 Event in progress</td>
-      <td style="text-align:center;color:#16a34a;font-weight:700">Expected</td>
-      <td style="text-align:center"><span style="background:#dcfce7;color:#15803d;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">✅ MONITOR</span></td>
+      <td style="text-align:center;color:#4ade80;font-weight:700">Expected</td>
+      <td style="text-align:center"><span style="background:rgba(22,163,74,0.25);color:#4ade80;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">✅ MONITOR</span></td>
     </tr>
-    <tr style="border-bottom:1px solid #f3f4f6">
+    <tr style="border-bottom:1px solid #1e293b">
       <td style="padding:10px 6px">🍽 Meal service</td>
-      <td style="text-align:center;color:#d97706;font-weight:700">Possible</td>
-      <td style="text-align:center"><span style="background:#fef9c3;color:#a16207;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">👁️ DISPATCH</span></td>
+      <td style="text-align:center;color:#fbbf24;font-weight:700">Possible</td>
+      <td style="text-align:center"><span style="background:rgba(217,119,6,0.25);color:#fbbf24;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">👁️ DISPATCH</span></td>
     </tr>
     <tr>
       <td style="padding:10px 6px">🌙 Quiet hours</td>
-      <td style="text-align:center;color:#dc2626;font-weight:700">DANGER</td>
-      <td style="text-align:center"><span style="background:#fee2e2;color:#b91c1c;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">🚨 EMERGENCY</span></td>
+      <td style="text-align:center;color:#f87171;font-weight:700">DANGER</td>
+      <td style="text-align:center"><span style="background:rgba(220,38,38,0.25);color:#f87171;padding:4px 16px;border-radius:20px;font-weight:700;font-size:0.88em">🚨 EMERGENCY</span></td>
     </tr>
   </table>
 </div>
@@ -761,27 +761,27 @@ SCORING_HTML = f"""
 <div class="hw-card">
   <h3>Scoring System</h3>
   <div class="score-block sb-g">
-    <strong style="color:#15803d;font-size:1.05em">🟢 Suppression &nbsp;·&nbsp; Easy</strong>
-    <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
+    <strong style="color:#4ade80;font-size:1.05em">🟢 Suppression &nbsp;·&nbsp; Easy</strong>
+    <p style="margin:6px 0 0;color:#cbd5e1;font-size:0.87em;line-height:1.6">
       F1 score — harmonic mean of sensitivity and specificity.
       Monitoring everything gives 0. Emergency-calling everything also penalised.
-      <br><strong>Baseline ~0.42 &nbsp;·&nbsp; LLM target ~0.75+</strong>
+      <br><strong style="color:#f1f5f9;">Baseline ~0.42 &nbsp;·&nbsp; LLM target ~0.75+</strong>
     </p>
   </div>
   <div class="score-block sb-y">
-    <strong style="color:#a16207;font-size:1.05em">🟡 Deterioration &nbsp;·&nbsp; Medium</strong>
-    <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
+    <strong style="color:#fbbf24;font-size:1.05em">🟡 Deterioration &nbsp;·&nbsp; Medium</strong>
+    <p style="margin:6px 0 0;color:#cbd5e1;font-size:0.87em;line-height:1.6">
       Onset-delay: score = 0.3 + 0.7 × (1 − delay/30).
       Detect crisis drift early for high score. Miss it completely → 0.
-      <br><strong>Baseline ~0.75 &nbsp;·&nbsp; LLM target ~0.85+</strong>
+      <br><strong style="color:#f1f5f9;">Baseline ~0.75 &nbsp;·&nbsp; LLM target ~0.85+</strong>
     </p>
   </div>
   <div class="score-block sb-r">
-    <strong style="color:#b91c1c;font-size:1.05em">🔴 Triage &nbsp;·&nbsp; Hard</strong>
-    <p style="margin:6px 0 0;color:#374151;font-size:0.87em;line-height:1.6">
+    <strong style="color:#f87171;font-size:1.05em">🔴 Triage &nbsp;·&nbsp; Hard</strong>
+    <p style="margin:6px 0 0;color:#cbd5e1;font-size:0.87em;line-height:1.6">
       NDCG@4 (50%) + EMERGENCY-F1 (30%) + Responsiveness (20%) − penalties.
       Sending DISPATCH to every zone is penalised. Must differentiate.
-      <br><strong>Baseline ~0.23 &nbsp;·&nbsp; LLM target ~0.65+</strong>
+      <br><strong style="color:#f1f5f9;">Baseline ~0.23 &nbsp;·&nbsp; LLM target ~0.65+</strong>
     </p>
   </div>
 </div>
