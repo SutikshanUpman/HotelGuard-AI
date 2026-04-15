@@ -1,5 +1,5 @@
 """
-Task 1: Suppression Grader (Easy)
+Task 2: Suppression Grader (Medium)
 =================================
 Grades how well the agent suppresses false alarms for an event ballroom zone
 while still catching real emergencies.

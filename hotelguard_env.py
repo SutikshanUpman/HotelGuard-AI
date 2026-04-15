@@ -17,8 +17,8 @@ from pydantic import BaseModel, Field
 
 from venue_simulator import ZoneSimulator
 from reward_function import RewardFunction, Action, ZoneCondition
-from task1_suppression import grade_suppression
-from task2_deterioration import grade_deterioration
+from task1_deterioration import grade_deterioration
+from task2_suppression import grade_suppression
 from task3_triage import grade_triage
 
 # ------------------------------------------------------------------ #

@@ -347,7 +347,7 @@ def demo_reset(task, seed, agent_mode):
 
     manual     = agent_mode == "Manual"
     is_tri     = task == "triage"
-    difficulty = {"suppression": "Easy", "deterioration": "Medium", "triage": "Hard"}[task]
+    difficulty = {"deterioration": "Easy", "suppression": "Medium", "triage": "Hard"}[task]
     status     = f"READY  {task.upper()} [{difficulty}]  Seed {seed}  {agent_mode}"
 
     floor_plan = _build_floor_plan(obs)
@@ -726,8 +726,8 @@ HEADER_HTML = f"""
 <div class="app-header">
   <h1>🏨 HotelGuard-AI</h1>
   <p class="tagline">Context-Aware Hospitality Crisis Detection &nbsp;·&nbsp; AI Safety Monitoring</p>
-  <span class="pill p-green">🟢 Suppression · Easy</span>
-  <span class="pill p-yellow">🟡 Deterioration · Medium</span>
+  <span class="pill p-green">🟢 Deterioration · Easy</span>
+  <span class="pill p-yellow">🟡 Suppression · Medium</span>
   <span class="pill p-red">🔴 Triage · Hard</span>
   <span class="pill p-white">Gemini Flash</span>
   <span class="pill p-white">NDCG@4</span>
@@ -771,19 +771,19 @@ SCORING_HTML = f"""
 <div class="hw-card">
   <h3>Scoring System</h3>
   <div class="score-block sb-g">
-    <strong style="color:#4ade80;font-size:1.05em">🟢 Suppression &nbsp;·&nbsp; Easy</strong>
-    <p style="margin:6px 0 0;color:#cbd5e1;font-size:0.87em;line-height:1.6">
-      F1 score — harmonic mean of sensitivity and specificity.
-      Monitoring everything gives 0. Emergency-calling everything also penalised.
-      <br><strong style="color:#f1f5f9;">Baseline ~0.42 &nbsp;·&nbsp; LLM target ~0.75+</strong>
-    </p>
-  </div>
-  <div class="score-block sb-y">
-    <strong style="color:#fbbf24;font-size:1.05em">🟡 Deterioration &nbsp;·&nbsp; Medium</strong>
+    <strong style="color:#4ade80;font-size:1.05em">🟢 Deterioration &nbsp;·&nbsp; Easy</strong>
     <p style="margin:6px 0 0;color:#cbd5e1;font-size:0.87em;line-height:1.6">
       Onset-delay: score = 0.3 + 0.7 × (1 − delay/30).
       Detect crisis drift early for high score. Miss it completely → 0.
       <br><strong style="color:#f1f5f9;">Baseline ~0.75 &nbsp;·&nbsp; LLM target ~0.85+</strong>
+    </p>
+  </div>
+  <div class="score-block sb-y">
+    <strong style="color:#fbbf24;font-size:1.05em">🟡 Suppression &nbsp;·&nbsp; Medium</strong>
+    <p style="margin:6px 0 0;color:#cbd5e1;font-size:0.87em;line-height:1.6">
+      F1 score — harmonic mean of sensitivity and specificity.
+      Monitoring everything gives 0. Emergency-calling everything also penalised.
+      <br><strong style="color:#f1f5f9;">Baseline ~0.42 &nbsp;·&nbsp; LLM target ~0.75+</strong>
     </p>
   </div>
   <div class="score-block sb-r">
@@ -943,9 +943,9 @@ with gr.Blocks(
 
 | Task | Zones | Challenge |
 |------|:-----:|-----------| 
-| 🟢 Suppression  | 1 event ballroom | High noise is *normal* — don't alarm |
-| 🟡 Deterioration | 1 guest room | Catch the trend before crisis |
-| 🔴 Triage       | 4 simultaneous | Rank by urgency — ordering matters |
+| 🟢 Deterioration | 1 guest room | Catch the trend before crisis |
+| 🟡 Suppression   | 1 event ballroom | High noise is *normal* — don't alarm |
+| 🔴 Triage        | 4 simultaneous | Rank by urgency — ordering matters |
 
 ### Action Space `Discrete(3)`
 

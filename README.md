@@ -79,7 +79,19 @@ real emergencies.
 
 ## Three Scenarios — Easy to Hard
 
-### Scenario 1 — Suppression (Easy)
+### Scenario 1 — Deterioration (Easy)
+
+**Setup:** A guest room where something is slowly going wrong over 60 timesteps. Starting at step 30: motion drops gradually, the door stops opening, smoke/CO level begins a slow climb, panic score inches up. Classic signature of a medical emergency or early fire buildup.
+
+**Challenge:** Detect the trend early. Single-step thresholds miss this — the individual readings stay within plausible range for many steps. Only an agent reading the signal history table can catch the drift before it becomes a full crisis.
+
+**Grader:** Onset-delay scoring: `score = 0.3 + 0.7 × (1 − delay/30)`. Catching it at step 32 scores near 1.0. Catching it at step 58 scores near 0.4. Missing it entirely scores 0.
+
+**Score range:** Rule-based ~0.75 · AI target ~0.85+
+
+---
+
+### Scenario 2 — Suppression (Medium)
 
 **Setup:** The hotel ballroom during a three-hour wedding reception. Sound levels, motion, occupancy, and door events are all elevated throughout. This is completely expected. Between steps 30–55, a genuine panic event is injected — a guest in distress.
 
@@ -90,18 +102,6 @@ real emergencies.
 **Grader:** F1 score — harmonic mean of sensitivity (catching the real panic event) and specificity (not firing on wedding noise).
 
 **Score range:** Rule-based ~0.42 · AI target ~0.75+
-
----
-
-### Scenario 2 — Deterioration (Medium)
-
-**Setup:** A guest room where something is slowly going wrong over 60 timesteps. Starting at step 30: motion drops gradually, the door stops opening, smoke/CO level begins a slow climb, panic score inches up. Classic signature of a medical emergency or early fire buildup.
-
-**Challenge:** Detect the trend early. Single-step thresholds miss this — the individual readings stay within plausible range for many steps. Only an agent reading the signal history table can catch the drift before it becomes a full crisis.
-
-**Grader:** Onset-delay scoring: `score = 0.3 + 0.7 × (1 − delay/30)`. Catching it at step 32 scores near 1.0. Catching it at step 58 scores near 0.4. Missing it entirely scores 0.
-
-**Score range:** Rule-based ~0.75 · AI target ~0.85+
 
 ---
 
@@ -257,8 +257,8 @@ HotelGuard-AI/
 ├── hotelguard_env.py       # RL environment — reset() / step() / state()
 ├── venue_simulator.py      # Zone signal generator (4 zone types, seeded)
 ├── reward_function.py      # Stateful reward calculator
-├── task1_suppression.py    # Grader: F1 (sensitivity + specificity)
-├── task2_deterioration.py  # Grader: onset-delay scoring
+├── task1_deterioration.py  # Grader: onset-delay scoring
+├── task2_suppression.py    # Grader: F1 (sensitivity + specificity)
 ├── task3_triage.py         # Grader: NDCG@4 + F1 + responsiveness
 ├── inference.py            # Gemini agent + rule-based fallback
 ├── Dockerfile
@@ -346,8 +346,8 @@ Recommended for live demo: **Hybrid mode** (default when API key is present). Fa
 
 | Scenario | Rule-Based Baseline | HotelGuard AI (Gemini) | Improvement |
 |----------|:-------------------:|:----------------------:|:-----------:|
-| Suppression (F1) | 0.4188 | 0.5348 | +0.1160 |
 | Deterioration (onset-delay) | 0.7533 | 0.7533 | +0.0000 |
+| Suppression (F1) | 0.4188 | 0.5348 | +0.1160 |
 | Triage (composite) | 0.2330 | *projected ~0.65* | *est. +0.42* |
 
 > **Note on Gemini scores:** Rule-based baseline is

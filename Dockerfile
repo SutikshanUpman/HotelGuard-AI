@@ -10,8 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all source files
 COPY venue_simulator.py .
 COPY reward_function.py .
-COPY task1_suppression.py .
-COPY task2_deterioration.py .
+COPY task1_deterioration.py .
+COPY task2_suppression.py .
 COPY task3_triage.py .
 COPY hotelguard_env.py .
 COPY inference.py .

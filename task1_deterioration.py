@@ -1,5 +1,5 @@
 """
-Task 2: Deterioration Grader (Medium)
+Task 1: Deterioration Grader (Easy)
 =====================================
 Grades how well the agent detects slow zone deterioration (e.g. medical
 emergency or fire buildup in a guest room).
