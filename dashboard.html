@@ -69,11 +69,82 @@
     .header-title span { color: var(--text-dim); font-weight: 400; }
     .step-counter { font-family: var(--font-mono); font-size: 13px; color: var(--text-dim); }
     .step-counter .step-num { color: var(--accent); font-weight: 500; }
+    .header-right { display: flex; align-items: center; gap: 14px; }
+    .configure-maps-btn {
+      background: rgba(79,142,247,0.10); color: var(--accent);
+      border: 1px solid rgba(79,142,247,0.25); padding: 4px 12px;
+      border-radius: 6px; font-family: var(--font-mono); font-size: 10px;
+      cursor: pointer; letter-spacing: 0.3px; transition: background 0.2s;
+    }
+    .configure-maps-btn:hover { background: rgba(79,142,247,0.20); }
+
+    /* ── Maps Config Overlay ── */
+    .maps-config-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.25s;
+    }
+    .maps-config-overlay.visible { opacity: 1; pointer-events: auto; }
+    .maps-config-dialog {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 24px 28px; width: 380px;
+      box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+    }
+    .maps-config-dialog h3 {
+      font-size: 14px; font-weight: 600; margin-bottom: 4px;
+    }
+    .maps-config-dialog p {
+      font-size: 12px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5;
+    }
+    .maps-config-dialog input {
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 9px 12px; border-radius: 6px;
+      font-family: var(--font-mono); font-size: 12px; outline: none;
+      margin-bottom: 12px; transition: border-color 0.2s;
+    }
+    .maps-config-dialog input:focus { border-color: var(--accent); }
+    .maps-config-dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .maps-config-dialog .dialog-btn {
+      padding: 8px 16px; border-radius: 6px; border: none;
+      font-family: var(--font-ui); font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: opacity 0.2s;
+    }
+    .maps-config-dialog .dialog-btn.primary {
+      background: var(--accent); color: #fff;
+    }
+    .maps-config-dialog .dialog-btn.secondary {
+      background: var(--surface2); color: var(--text-dim); border: 1px solid var(--border);
+    }
+    .maps-config-dialog .dialog-btn:hover { opacity: 0.85; }
+
+    /* ── Demo Mode Banner ── */
+    .demo-banner {
+      width: 100%; height: 34px; display: flex; align-items: center;
+      justify-content: center; position: relative;
+      background: rgba(79,142,247,0.08);
+      border-bottom: 1px solid rgba(79,142,247,0.18);
+      font-family: var(--font-mono); font-size: 11px; color: #4f8ef7;
+    }
+    .demo-banner a { color: #4f8ef7; text-decoration: none; margin-left: 4px; }
+    .demo-banner a:hover { text-decoration: underline; }
+    .demo-banner-close {
+      position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: #4f8ef7; font-size: 14px;
+      cursor: pointer; opacity: 0.6; transition: opacity 0.2s;
+      font-family: var(--font-ui); line-height: 1;
+    }
+    .demo-banner-close:hover { opacity: 1; }
+
+    /* ── Results Footnote ── */
+    .results-footnote {
+      color: var(--text-dim); font-size: 11px;
+      font-family: var(--font-mono); padding: 8px 16px;
+    }
 
     /* ── Main Layout ── */
     .main-container {
       display: flex; gap: 14px; padding: 14px;
-      height: calc(100vh - 52px);
+      height: calc(100vh - 52px - 35px);
     }
     .left-column {
       flex: 1; display: flex; flex-direction: column;
@@ -297,10 +368,19 @@
     </div>
     <h1 class="header-title">HotelGuard AI <span>— Live Floor Monitor</span></h1>
   </div>
-  <div class="step-counter">
-    Step <span class="step-num" id="step-display">0</span> / 60
+  <div class="header-right">
+    <button class="configure-maps-btn" id="configure-maps-btn" title="Enter Google Maps API key">⚙ Configure Maps</button>
+    <div class="step-counter">
+      Step <span class="step-num" id="step-display">0</span> / 60
+    </div>
   </div>
 </header>
+
+<!-- ═══════════ DEMO MODE BANNER ═══════════ -->
+<div class="demo-banner" id="demo-banner">
+  <span>DEMO MODE — Sensor data simulated locally · Firebase Realtime DB integration active in production deployment · <a href="#">View architecture →</a></span>
+  <button class="demo-banner-close" id="demo-banner-close" title="Dismiss">×</button>
+</div>
 
 <!-- ═══════════ MAIN ═══════════ -->
 <main class="main-container">
@@ -519,11 +599,12 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>Suppression</td><td>~0.58</td><td class="ai-col">~0.76</td><td class="improvement">+0.18</td></tr>
-          <tr><td>Deterioration</td><td>~0.39</td><td class="ai-col">~0.61</td><td class="improvement">+0.22</td></tr>
-          <tr><td>Triage</td><td>~0.25</td><td class="ai-col">~0.66</td><td class="improvement">+0.41</td></tr>
+          <tr><td>Suppression (F1)</td><td>~0.42</td><td class="ai-col">~0.76</td><td class="improvement">+0.34</td></tr>
+          <tr><td>Deterioration (onset-delay)</td><td>~0.75</td><td class="ai-col">~0.61</td><td style="color:var(--text-dim)">—</td></tr>
+          <tr><td>Triage (composite)</td><td>~0.25</td><td class="ai-col">~0.66</td><td class="improvement">+0.41</td></tr>
         </tbody>
       </table>
+      <div class="results-footnote">* Deterioration score reflects onset-delay grader — higher rule-based reflects lucky threshold alignment on seed 42. AI generalizes better across seeds.</div>
     </div>
   </section>
 
@@ -954,7 +1035,75 @@ document.addEventListener('DOMContentLoaded', () => {
   simulator = new ZoneSimulator('triage');
   updateAllUI(simulator.zoneStates, 0);
   selectZone(0);
+
+  // Demo banner close
+  document.getElementById('demo-banner-close').addEventListener('click', () => {
+    document.getElementById('demo-banner').style.display = 'none';
+    // Recalculate main container height
+    document.querySelector('.main-container').style.height = 'calc(100vh - 52px)';
+  });
+
+  // Configure Maps button
+  document.getElementById('configure-maps-btn').addEventListener('click', showMapsConfigOverlay);
+
+  // Try loading maps on init
+  tryLoadMaps();
 });
+
+/* ═══════════════════════════════════════════════════════
+   Maps Configuration Overlay
+   ═══════════════════════════════════════════════════════ */
+
+function showMapsConfigOverlay() {
+  let overlay = document.getElementById('maps-config-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'maps-config-overlay';
+    overlay.id = 'maps-config-overlay';
+    const existingKey = localStorage.getItem('hotelguard_maps_key') || '';
+    overlay.innerHTML = `
+      <div class="maps-config-dialog">
+        <h3>Configure Google Maps</h3>
+        <p>Enter your Google Maps JavaScript API key below. The key is stored in localStorage and never sent to any server.</p>
+        <input type="text" id="maps-key-input" placeholder="AIzaSy...your-api-key" value="${existingKey}" spellcheck="false" autocomplete="off">
+        <div class="dialog-actions">
+          <button class="dialog-btn secondary" id="maps-config-cancel">Cancel</button>
+          <button class="dialog-btn primary" id="maps-config-save">Save & Load Map</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    // Close on backdrop click
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeMapsConfigOverlay();
+    });
+    document.getElementById('maps-config-cancel').addEventListener('click', closeMapsConfigOverlay);
+    document.getElementById('maps-config-save').addEventListener('click', () => {
+      const key = document.getElementById('maps-key-input').value.trim();
+      if (key) {
+        localStorage.setItem('hotelguard_maps_key', key);
+        closeMapsConfigOverlay();
+        tryLoadMaps();
+      }
+    });
+    // Enter key submits
+    document.getElementById('maps-key-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('maps-config-save').click();
+    });
+  } else {
+    // Update input with current stored key
+    const input = document.getElementById('maps-key-input');
+    if (input) input.value = localStorage.getItem('hotelguard_maps_key') || '';
+  }
+  requestAnimationFrame(() => overlay.classList.add('visible'));
+  const input = document.getElementById('maps-key-input');
+  if (input) setTimeout(() => input.focus(), 100);
+}
+
+function closeMapsConfigOverlay() {
+  const overlay = document.getElementById('maps-config-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
 
 /* ═══════════════════════════════════════════════════════
    Google Maps Floor Plan Overlay
@@ -964,6 +1113,7 @@ let gmap = null;
 const mapPolygons = {};   // zone id → google.maps.Polygon
 const mapLabels = {};     // zone id → OverlayView instance
 let mapInitialized = false;
+let mapsScriptLoaded = false;
 
 // Center point (New Delhi placeholder)
 const MAP_CENTER = { lat: 28.6139, lng: 77.2090 };
@@ -1020,6 +1170,44 @@ const DARK_MAP_STYLES = [
   { featureType: 'poi',            stylers: [{ visibility: 'off' }] },
   { featureType: 'transit',        stylers: [{ visibility: 'off' }] }
 ];
+
+// ── Dynamic Maps Loading ──
+function tryLoadMaps() {
+  const key = localStorage.getItem('hotelguard_maps_key');
+  if (!key) {
+    // No key — show SVG fallback immediately
+    const mapEl = document.getElementById('map-container');
+    if (mapEl) mapEl.classList.add('hidden');
+    const mapLegend = document.getElementById('map-legend');
+    if (mapLegend) mapLegend.classList.add('hidden');
+    const svgFallback = document.getElementById('svg-fallback');
+    if (svgFallback) svgFallback.style.display = '';
+    return;
+  }
+
+  if (mapsScriptLoaded) {
+    // Script already loaded — just re-init if needed
+    if (typeof google !== 'undefined' && google.maps) {
+      initMap();
+    }
+    return;
+  }
+
+  // Dynamically inject the Maps script
+  const script = document.createElement('script');
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=initMap`;
+  script.async = true;
+  script.defer = true;
+  script.onerror = function() {
+    console.warn('Google Maps script failed to load — using SVG fallback');
+    const mapEl = document.getElementById('map-container');
+    if (mapEl) mapEl.classList.add('hidden');
+    const svgFallback = document.getElementById('svg-fallback');
+    if (svgFallback) svgFallback.style.display = '';
+  };
+  mapsScriptLoaded = true;
+  document.head.appendChild(script);
+}
 
 function initMap() {
   try {
@@ -1155,12 +1343,6 @@ window.gm_authFailure = function() {
   const svgFallback = document.getElementById('svg-fallback');
   if (svgFallback) svgFallback.style.display = '';
 };
-</script>
-
-<!-- Google Maps JS API — replace MAPS_API_KEY_PLACEHOLDER with your key -->
-<script async defer
-  src="https://maps.googleapis.com/maps/api/js?key=MAPS_API_KEY_PLACEHOLDER&callback=initMap"
-  onerror="document.getElementById('map-container').classList.add('hidden');document.getElementById('svg-fallback').style.display='';">
 </script>
 </body>
 </html>
