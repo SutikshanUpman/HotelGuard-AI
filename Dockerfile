@@ -18,6 +18,7 @@ COPY inference.py .
 COPY app.py .
 COPY dashboard.html .
 COPY README.md .
+COPY results_cache.json .
 
 # HotelGuard-AI uses port 7860
 EXPOSE 7860

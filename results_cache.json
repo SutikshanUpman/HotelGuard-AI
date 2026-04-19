@@ -1,6 +1,6 @@
 {
   "deterioration": {
-    "score": 0.8524,
+    "score": 0.7533333333333333,
     "steps": [
       {
         "step": 1,
@@ -6005,7 +6005,7 @@
     ]
   },
   "suppression": {
-    "score": 0.7632,
+    "score": 0.4187604690117253,
     "steps": [
       {
         "step": 1,
@@ -12010,7 +12010,7 @@
     ]
   },
   "triage": {
-    "score": 0.651,
+    "score": 0.23296487678572875,
     "steps": [
       {
         "step": 1,
